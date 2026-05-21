@@ -325,12 +325,16 @@ BTN_LIVE      = "📺 Онлайн-стріми / Live"
 BTN_ABOUT     = "🖤 Про гурт"
 BTN_SUBSCRIBE = "🔔 Фан-клуб (підписка)"
 BTN_FEEDBACK  = "💬 Запитання / Відгуки"
+BTN_DONATE    = "🪙 Підтримати копійчиною"
+
+DONATE_URL = "https://paypal.me/Sasha89Alex"
 
 MAIN_KEYBOARD = ReplyKeyboardMarkup(
     [
         [KeyboardButton(BTN_TRACKS), KeyboardButton(BTN_RELEASES)],
         [KeyboardButton(BTN_LIVE), KeyboardButton(BTN_ABOUT)],
         [KeyboardButton(BTN_SUBSCRIBE), KeyboardButton(BTN_FEEDBACK)],
+        [KeyboardButton(BTN_DONATE)],
     ],
     resize_keyboard=True,
     is_persistent=True,
@@ -644,6 +648,25 @@ async def section_subscribe(
     await update.message.reply_text("🪓", reply_markup=MAIN_KEYBOARD)
 
 
+async def section_donate(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    text = (
+        "🪙 *Підтримай нас копійчиною* 🖤🔥\n\n"
+        "Кожна копійка йде на репетиції, запис нових треків, "
+        "струни, барабанні палички і свічки у студії 🕯️🎸\n\n"
+        "Дякуємо, що ти з нами у цій темряві. Без тебе не було б "
+        "ні полум'я, ні звуку. 🤘"
+    )
+    keyboard = InlineKeyboardMarkup(
+        [[InlineKeyboardButton("💸 Підтримати через PayPal", url=DONATE_URL)]]
+    )
+    await update.message.reply_text(
+        text, reply_markup=keyboard, parse_mode=ParseMode.MARKDOWN
+    )
+    await update.message.reply_text("🖤", reply_markup=MAIN_KEYBOARD)
+
+
 async def cmd_unsubscribe(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
@@ -824,6 +847,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         BTN_ABOUT: section_about,
         BTN_SUBSCRIBE: section_subscribe,
         BTN_FEEDBACK: section_feedback,
+        BTN_DONATE: section_donate,
     }
     if text in routes:
         await routes[text](update, context)
