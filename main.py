@@ -3,7 +3,7 @@ Telegram-бот для українського онлайн-метал гурт
 "Gathering Of The Fallen" (Монреаль, Квебек, Канада).
 
 Стек:
-    - python-telegram-bot 21.x (async)
+    - python-telegram-bot 21.x (async, polling)
     - OpenAI (gpt-4o-mini за замовчуванням)
     - JSON-сховище підписок та відгуків
     - Постійне ReplyKeyboard меню + InlineKeyboard для треків
@@ -18,6 +18,7 @@ import json
 import logging
 import os
 import threading
+import urllib.parse
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -68,6 +69,42 @@ FEEDBACK_FILE = DATA_DIR / "feedback.json"
 
 openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 
+# ===========================================================================
+# 🔧 CONFIG — впиши сюди РЕАЛЬНІ посилання гурту
+# ===========================================================================
+#
+# 1) BAND_LINKS — головні сторінки гурту на платформах.
+#    Якщо реальної URL ще немає — лиши None, тоді кнопка не з'явиться
+#    і бот замість неї покаже пошук на платформі.
+#
+# 2) TRACK_LINKS — прямі URL на конкретний трек/кліп.
+#    Ключ = точна назва треку зі списку TRACKS нижче.
+#    Якщо для треку прямого URL немає — лиши порожній dict {} або None.
+#    Тоді бот сам зробить пошуковий лінк на платформі (з лапками,
+#    щоб шукав ТОЧНУ назву + назву гурту).
+# ===========================================================================
+
+BAND_NAME = "Gathering Of The Fallen"
+
+BAND_LINKS: dict[str, str | None] = {
+    "YouTube":     None,   # напр. "https://www.youtube.com/@GatheringOfTheFallen"
+    "Spotify":     None,   # напр. "https://open.spotify.com/artist/<ID>"
+    "Apple Music": None,   # напр. "https://music.apple.com/artist/<slug>/<id>"
+    "Bandcamp":    None,   # напр. "https://gatheringofthefallen.bandcamp.com"
+    "Instagram":   None,   # напр. "https://instagram.com/gatheringofthefallen"
+}
+
+# Впиши прямі URL для кожного треку (необов'язково для всіх одразу).
+# Якщо для треку немає прямого URL на платформі — кнопка стане пошуком.
+TRACK_LINKS: dict[str, dict[str, str]] = {
+    # Приклад заповнення:
+    # "Блукаючий козак": {
+    #     "YouTube":     "https://www.youtube.com/watch?v=XXXXXXXXXXX",
+    #     "Spotify":     "https://open.spotify.com/track/XXXXXXXXXXXXXXXXXXXXXX",
+    #     "Apple Music": "https://music.apple.com/album/XXXXXXX?i=XXXXXXXXX",
+    # },
+}
+
 # ---------------------------------------------------------------------------
 # System prompt
 # ---------------------------------------------------------------------------
@@ -97,46 +134,83 @@ SYSTEM_PROMPT = """
 """.strip()
 
 # ---------------------------------------------------------------------------
-# Дані про гурт
+# Дані про треки + теги настроїв
 # ---------------------------------------------------------------------------
 
-BAND_LINKS = {
-    "YouTube": "https://www.youtube.com/@GatheringOfTheFallen",
-    "Spotify": "https://open.spotify.com/artist/GatheringOfTheFallen",
-    "Apple Music": "https://music.apple.com/artist/gathering-of-the-fallen",
-}
-
-TRACKS = [
-    {"title": "Блукаючий козак", "mood": "ностальгія"},
-    {"title": "Полум'я (FLAMME)", "mood": "вогонь"},
-    {"title": "Гори", "mood": "сила"},
-    {"title": "Псалми", "mood": "ностальгія"},
-    {"title": "Валькірія Димуйгоря", "mood": "вогонь"},
-    {"title": "Спомин", "mood": "ностальгія"},
-    {"title": "Emigrant", "mood": "еміграція"},
-    {"title": "Із Попелу", "mood": "сила"},
-    {"title": "Старий Хорон", "mood": "ностальгія"},
-    {"title": "Залізний спадок", "mood": "сила"},
-    {"title": "Не втрачай", "mood": "вогонь"},
+# tags — це ключі словника MOODS нижче, до яких належить трек
+TRACKS: list[dict[str, Any]] = [
+    {"title": "Блукаючий козак",     "tags": ["nostalgia", "emigrant"]},
+    {"title": "Полум'я (FLAMME)",    "tags": ["fire", "strength"]},
+    {"title": "Гори",                "tags": ["strength"]},
+    {"title": "Псалми",              "tags": ["nostalgia"]},
+    {"title": "Валькірія Димуйгоря", "tags": ["fire", "strength"]},
+    {"title": "Спомин",              "tags": ["nostalgia", "emigrant"]},
+    {"title": "Emigrant",            "tags": ["emigrant", "nostalgia"]},
+    {"title": "Із Попелу",           "tags": ["strength", "fire"]},
+    {"title": "Старий Хорон",        "tags": ["nostalgia"]},
+    {"title": "Залізний спадок",     "tags": ["strength"]},
+    {"title": "Не втрачай",          "tags": ["fire", "strength"]},
 ]
 
 MOODS = {
     "nostalgia": "🕯️ Ностальгія / сум за домом",
-    "strength": "🪓 Сила / боротьба",
-    "fire": "🔥 Вогонь / мотивація",
-    "emigrant": "🌲 Еміграція",
+    "strength":  "🪓 Сила / боротьба",
+    "fire":      "🔥 Вогонь / мотивація",
+    "emigrant":  "🌲 Еміграція",
 }
+
+# ---------------------------------------------------------------------------
+# URL-хелпери: повертають або прямий лінк (якщо заданий), або робочий пошук
+# ---------------------------------------------------------------------------
+
+
+def _q(s: str) -> str:
+    return urllib.parse.quote_plus(s)
+
+
+def search_url(platform: str, query: str) -> str:
+    """Гарантовано робочий URL пошуку на платформі. Лапки для точного збігу."""
+    q = f'"{BAND_NAME}" {query}'
+    if platform == "YouTube":
+        return f"https://www.youtube.com/results?search_query={_q(q)}"
+    if platform == "Spotify":
+        return f"https://open.spotify.com/search/{_q(q)}"
+    if platform == "Apple Music":
+        return f"https://music.apple.com/search?term={_q(q)}"
+    if platform == "Bandcamp":
+        return f"https://bandcamp.com/search?q={_q(q)}"
+    if platform == "Instagram":
+        tag = (query or BAND_NAME).replace(" ", "").replace("'", "")
+        return f"https://www.instagram.com/explore/tags/{_q(tag)}/"
+    return f"https://www.google.com/search?q={_q(q)}"
+
+
+def band_url(platform: str) -> str:
+    """Головна сторінка гурту, або пошук на платформі."""
+    direct = BAND_LINKS.get(platform)
+    if direct:
+        return direct
+    return search_url(platform, "")
+
+
+def track_url(track_title: str, platform: str) -> str:
+    """Прямий URL треку, або пошук точно за назвою треку + назвою гурту."""
+    direct = (TRACK_LINKS.get(track_title) or {}).get(platform)
+    if direct:
+        return direct
+    return search_url(platform, track_title)
+
 
 # ---------------------------------------------------------------------------
 # Меню
 # ---------------------------------------------------------------------------
 
-BTN_TRACKS = "🎵 Треки та плейлисти"
-BTN_RELEASES = "🔥 Нові релізи"
-BTN_LIVE = "📺 Онлайн-стріми / Live"
-BTN_ABOUT = "🖤 Про гурт"
+BTN_TRACKS    = "🎵 Треки та плейлисти"
+BTN_RELEASES  = "🔥 Нові релізи"
+BTN_LIVE      = "📺 Онлайн-стріми / Live"
+BTN_ABOUT     = "🖤 Про гурт"
 BTN_SUBSCRIBE = "🔔 Фан-клуб (підписка)"
-BTN_FEEDBACK = "💬 Запитання / Відгуки"
+BTN_FEEDBACK  = "💬 Запитання / Відгуки"
 
 MAIN_KEYBOARD = ReplyKeyboardMarkup(
     [
@@ -224,8 +298,12 @@ def save_feedback(chat_id: int, username: str | None, text: str) -> None:
 # ---------------------------------------------------------------------------
 
 
+class AIQuotaError(Exception):
+    """OpenAI вичерпав квоту/біллінг."""
+
+
 async def ai_reply(user_message: str, history: list[dict] | None = None) -> str:
-    """Запит до OpenAI з фірмовим system prompt."""
+    """Запит до OpenAI з фірмовим system prompt. Кидає AIQuotaError при 429."""
     messages: list[dict] = [{"role": "system", "content": SYSTEM_PROMPT}]
     if history:
         messages.extend(history[-8:])
@@ -240,10 +318,14 @@ async def ai_reply(user_message: str, history: list[dict] | None = None) -> str:
         )
         return resp.choices[0].message.content or "🕯️ Тиша... спробуй ще раз."
     except Exception as e:
+        msg = str(e)
+        if "insufficient_quota" in msg or "429" in msg:
+            log.warning("OpenAI quota exhausted: %s", msg[:200])
+            raise AIQuotaError(msg) from e
         log.exception("OpenAI error: %s", e)
         return (
             "🦇 Зараз сили темряви блокують зв'язок з оракулом. "
-            "Спробуй ще раз за хвилину, брате."
+            "Спробуй ще раз за хвилину."
         )
 
 
@@ -259,9 +341,32 @@ def get_history(context: ContextTypes.DEFAULT_TYPE) -> list[dict]:
 def push_history(context: ContextTypes.DEFAULT_TYPE, role: str, content: str) -> None:
     hist = get_history(context)
     hist.append({"role": role, "content": content})
-    # обмеження пам'яті
     if len(hist) > 16:
         del hist[: len(hist) - 16]
+
+
+QUOTA_MESSAGE = (
+    "🦇 Зараз AI-оракул мовчить — у власника бота закінчилась квота OpenAI.\n"
+    "Поповни баланс на https://platform.openai.com/account/billing — "
+    "і темна магія повернеться 🔥"
+)
+
+
+def static_mood_playlist(mood_key: str) -> str:
+    """Запасний плейлист коли AI недоступний — будуємо з тегів треків."""
+    mood_label = MOODS[mood_key]
+    picks = [t["title"] for t in TRACKS if mood_key in t["tags"]]
+    if not picks:
+        picks = [t["title"] for t in TRACKS[:5]]
+    lines = [f"🎧 *Плейлист під настрій:* {mood_label}", ""]
+    for i, title in enumerate(picks[:6], 1):
+        lines.append(f"{i}. *{title}*")
+    lines += [
+        "",
+        "Натисни 🎵 у меню — і відкрий будь-який трек на YouTube / Spotify / Apple Music.",
+        "Або 🔔 *Фан-клуб* — щоб не пропустити нові релізи 🖤",
+    ]
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -269,12 +374,19 @@ def push_history(context: ContextTypes.DEFAULT_TYPE, role: str, content: str) ->
 # ---------------------------------------------------------------------------
 
 
+def _md_escape(s: str) -> str:
+    """Екранує символи Markdown V1 для безпечної підстановки в шаблони."""
+    for ch in ("_", "*", "`", "["):
+        s = s.replace(ch, "\\" + ch)
+    return s
+
+
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
-    name = user.first_name if user else "брате"
+    name = _md_escape(user.first_name) if user and user.first_name else "брате"
     text = (
         f"🖤 Вітаю, {name}!\n\n"
-        "Ти потрапив у простір *Gathering Of The Fallen* — "
+        f"Ти потрапив у простір *{BAND_NAME}* — "
         "українського онлайн-метал гурту з Монреаля 🇨🇦🇺🇦\n\n"
         "Мелодійний death / atmospheric / folk-metal про еміграцію, "
         "пам'ять і силу духу 🔥🪓\n\n"
@@ -330,11 +442,11 @@ async def section_releases(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         "🔥 *Нові релізи*\n\n"
         "• Альбом *Music Of My Soul* (2025) — 21 трек українською 🪓\n"
         "• Сингли 2026: серія нових треків про еміграцію та силу духу 🌲\n\n"
-        "Підпишись 🔔 — і отримаєш сповіщення про кожен новий реліз першим."
+        "Підпишись 🔔 — і бот сам надішле тобі сповіщення, коли вийде новий реліз."
     )
     buttons = [[InlineKeyboardButton("🔔 Підписатися", callback_data="subscribe")]]
-    for name, url in BAND_LINKS.items():
-        buttons.append([InlineKeyboardButton(f"▶️ {name}", url=url)])
+    for name in ("YouTube", "Spotify", "Apple Music", "Bandcamp"):
+        buttons.append([InlineKeyboardButton(f"▶️ {name}", url=band_url(name))])
     await update.message.reply_text(
         text,
         reply_markup=InlineKeyboardMarkup(buttons),
@@ -351,7 +463,7 @@ async def section_live(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "щоб не пропустити анонс."
     )
     buttons = [
-        [InlineKeyboardButton("▶️ YouTube канал", url=BAND_LINKS["YouTube"])],
+        [InlineKeyboardButton("▶️ YouTube", url=band_url("YouTube"))],
         [InlineKeyboardButton("🔔 Підписатися на анонси", callback_data="subscribe")],
     ]
     await update.message.reply_text(
@@ -363,7 +475,7 @@ async def section_live(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 async def section_about(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     text = (
-        "🖤 *Gathering Of The Fallen*\n\n"
+        f"🖤 *{BAND_NAME}*\n\n"
         "Український онлайн-метал гурт з Монреаля (Квебек, Канада) 🇨🇦🇺🇦\n\n"
         "Жанр: melodic death / atmospheric / folk-metal 🪓🌲\n\n"
         "Теми: еміграція, ностальгія за Україною, пам'ять про загиблих, "
@@ -371,8 +483,8 @@ async def section_about(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         "Музика народжується дистанційно — у різних кутках світу, але з одним серцем."
     )
     buttons = []
-    for name, url in BAND_LINKS.items():
-        buttons.append([InlineKeyboardButton(f"▶️ {name}", url=url)])
+    for name in ("YouTube", "Spotify", "Apple Music", "Bandcamp", "Instagram"):
+        buttons.append([InlineKeyboardButton(f"▶️ {name}", url=band_url(name))])
     await update.message.reply_text(
         text,
         reply_markup=InlineKeyboardMarkup(buttons),
@@ -388,8 +500,10 @@ async def section_subscribe(
     is_new = add_subscription(chat_id, user.username if user else None)
     if is_new:
         text = (
-            "🔔 Вітаємо у фан-клубі *Gathering Of The Fallen*! 🖤🔥\n\n"
-            "Тепер ти першим дізнаєшся про нові релізи, стріми та секретні дропи.\n\n"
+            f"🔔 Вітаємо у фан-клубі *{BAND_NAME}*! 🖤🔥\n\n"
+            "Це наш внутрішній список — ми збережемо твій chat_id "
+            "і бот сам надішле тобі сповіщення про нові релізи та стріми.\n"
+            "Нічого зовнішнього не підключається.\n\n"
             "Щоб відписатись — натисни /unsubscribe."
         )
     else:
@@ -446,41 +560,34 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     await query.answer()
     data = query.data or ""
 
+    # Перегляд треку
     if data.startswith("track:"):
         idx = int(data.split(":", 1)[1])
+        if not (0 <= idx < len(TRACKS)):
+            return
         track = TRACKS[idx]
         title = track["title"]
+        moods = ", ".join(MOODS[m].split(" ", 1)[1] for m in track["tags"])
+        has_direct = bool((TRACK_LINKS.get(title) or {}))
+        hint = "" if has_direct else "\n_(посилання — пошук точно за назвою на платформі)_"
         buttons = [
             [
-                InlineKeyboardButton(
-                    "▶️ YouTube",
-                    url=f"https://www.youtube.com/results?search_query="
-                    f"Gathering+Of+The+Fallen+{title.replace(' ', '+')}",
-                ),
-                InlineKeyboardButton(
-                    "🎧 Spotify",
-                    url=f"https://open.spotify.com/search/"
-                    f"Gathering%20Of%20The%20Fallen%20{title}",
-                ),
+                InlineKeyboardButton("▶️ YouTube", url=track_url(title, "YouTube")),
+                InlineKeyboardButton("🎧 Spotify", url=track_url(title, "Spotify")),
             ],
             [
-                InlineKeyboardButton(
-                    "🍎 Apple Music",
-                    url=f"https://music.apple.com/search?term="
-                    f"Gathering+Of+The+Fallen+{title.replace(' ', '+')}",
-                ),
-                InlineKeyboardButton(
-                    "💬 Лишити відгук", callback_data=f"fb:{idx}"
-                ),
+                InlineKeyboardButton("🍎 Apple Music", url=track_url(title, "Apple Music")),
+                InlineKeyboardButton("💬 Лишити відгук", callback_data=f"fb:{idx}"),
             ],
         ]
         await query.message.reply_text(
-            f"🎵 *{title}*\n_Настрій: {track['mood']}_ 🔥\n\nОбирай платформу:",
+            f"🎵 *{title}*\n_Настрій: {moods}_ 🔥{hint}",
             reply_markup=InlineKeyboardMarkup(buttons),
             parse_mode=ParseMode.MARKDOWN,
         )
         return
 
+    # Меню настроїв
     if data == "mood:menu":
         buttons = [
             [InlineKeyboardButton(label, callback_data=f"mood:{key}")]
@@ -493,22 +600,48 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         )
         return
 
+    # Конкретний настрій → AI або статичний fallback
     if data.startswith("mood:"):
         mood_key = data.split(":", 1)[1]
-        if mood_key in MOODS:
-            await query.message.chat.send_action(ChatAction.TYPING)
-            prompt = (
-                f"Склади короткий плейлист (4-6 треків) з наших пісень "
-                f"для настрою «{MOODS[mood_key]}». Використай ТІЛЬКИ ці треки: "
-                f"{', '.join(t['title'] for t in TRACKS)}. "
-                "Для кожного — 1 рядок, чому саме він. В кінці запропонуй підписатися 🔔."
-            )
+        if mood_key not in MOODS:
+            return
+
+        # Миттєвий індикатор, щоб юзер бачив що щось відбувається
+        loading = await query.message.reply_text(
+            f"🕯️ Складаю плейлист під настрій *{MOODS[mood_key]}*...",
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        await query.message.chat.send_action(ChatAction.TYPING)
+
+        track_list = ", ".join(t["title"] for t in TRACKS)
+        prompt = (
+            f"Склади короткий плейлист (4-6 треків) з наших пісень "
+            f"для настрою «{MOODS[mood_key]}». Використай ТІЛЬКИ ці треки "
+            f"(без вигаданих): {track_list}. "
+            "Для кожного — 1 рядок, чому саме він. "
+            "В кінці запропонуй відкрити меню 🎵 щоб послухати, або 🔔 підписатися."
+        )
+
+        try:
             reply = await ai_reply(prompt)
-            await query.message.reply_text(
-                reply, reply_markup=MAIN_KEYBOARD
-            )
+        except AIQuotaError:
+            reply = static_mood_playlist(mood_key) + "\n\n" + QUOTA_MESSAGE
+        except Exception as e:
+            log.exception("mood callback ai error: %s", e)
+            reply = static_mood_playlist(mood_key)
+
+        try:
+            await loading.delete()
+        except Exception:
+            pass
+        # AI-вивід шлемо як plain text, щоб Telegram не падав на парсингу Markdown
+        await query.message.reply_text(
+            reply,
+            reply_markup=MAIN_KEYBOARD,
+        )
         return
 
+    # Підписка з inline-кнопки
     if data == "subscribe":
         user = update.effective_user
         is_new = add_subscription(
@@ -522,8 +655,11 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await query.message.reply_text(msg, reply_markup=MAIN_KEYBOARD)
         return
 
+    # Відгук про конкретний трек
     if data.startswith("fb:"):
         idx = int(data.split(":", 1)[1])
+        if not (0 <= idx < len(TRACKS)):
+            return
         track = TRACKS[idx]
         context.user_data["awaiting_feedback"] = True
         context.user_data["feedback_track"] = track["title"]
@@ -545,7 +681,6 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not text:
         return
 
-    # Маршрутизація меню
     routes = {
         BTN_TRACKS: section_tracks,
         BTN_RELEASES: section_releases,
@@ -558,7 +693,6 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await routes[text](update, context)
         return
 
-    # Відгук
     if context.user_data.pop("awaiting_feedback", False):
         track = context.user_data.pop("feedback_track", None)
         full = f"[{track}] {text}" if track else text
@@ -576,9 +710,13 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     # AI-діалог
     await update.message.chat.send_action(ChatAction.TYPING)
     history = get_history(context)
-    reply = await ai_reply(text, history)
-    push_history(context, "user", text)
-    push_history(context, "assistant", reply)
+    try:
+        reply = await ai_reply(text, history)
+        push_history(context, "user", text)
+        push_history(context, "assistant", reply)
+    except AIQuotaError:
+        reply = QUOTA_MESSAGE
+    # plain text — AI-вивід може містити сирий Markdown, який ламає парсинг
     await update.message.reply_text(reply, reply_markup=MAIN_KEYBOARD)
 
 
@@ -605,7 +743,7 @@ async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 def _keep_alive_loop() -> None:
-    """Простий heartbeat у лог — щоб контейнер не "засинав"."""
+    """Heartbeat у лог — щоб контейнер не "засинав"."""
     import time
 
     while True:
