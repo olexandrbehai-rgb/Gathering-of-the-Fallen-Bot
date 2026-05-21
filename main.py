@@ -606,6 +606,13 @@ async def section_about(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     )
 
 
+def _youtube_subscribe_url() -> str:
+    """URL каналу з параметром, що автоматично відкриває діалог підписки."""
+    base = BAND_LINKS.get("YouTube") or "https://www.youtube.com/@gathering-of-the-fallen"
+    sep = "&" if "?" in base else "?"
+    return f"{base}{sep}sub_confirmation=1"
+
+
 async def section_subscribe(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
@@ -615,16 +622,26 @@ async def section_subscribe(
     if is_new:
         text = (
             f"🔔 Вітаємо у фан-клубі *{BAND_NAME}*! 🖤🔥\n\n"
-            "Це наш внутрішній список — ми збережемо твій chat_id "
-            "і бот сам надішле тобі сповіщення про нові релізи та стріми.\n"
-            "Нічого зовнішнього не підключається.\n\n"
-            "Щоб відписатись — натисни /unsubscribe."
+            "Бот тепер сам надсилатиме тобі сповіщення про нові релізи та стріми.\n\n"
+            "👇 І ще один крок — *підпишись на наш YouTube*, "
+            "щоб не пропустити жодного кліпу. Кнопка нижче одразу відкриє "
+            "віконце підтвердження підписки 🎬\n\n"
+            "Щоб відписатись від бота — /unsubscribe"
         )
     else:
-        text = "🖤 Ти вже у фан-клубі. Дякуємо, що з нами! 🔥"
-    await update.message.reply_text(
-        text, reply_markup=MAIN_KEYBOARD, parse_mode=ParseMode.MARKDOWN
+        text = (
+            "🖤 Ти вже у фан-клубі бота. Дякуємо, що з нами! 🔥\n\n"
+            "Якщо ще не підписаний на YouTube — зроби це одним тапом:"
+        )
+    keyboard = InlineKeyboardMarkup(
+        [[InlineKeyboardButton("🎬 Підписатись на YouTube",
+                               url=_youtube_subscribe_url())]]
     )
+    await update.message.reply_text(
+        text, reply_markup=keyboard, parse_mode=ParseMode.MARKDOWN
+    )
+    # повертаємо нижнє меню окремим коротким повідомленням
+    await update.message.reply_text("🪓", reply_markup=MAIN_KEYBOARD)
 
 
 async def cmd_unsubscribe(
@@ -762,11 +779,16 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             update.effective_chat.id, user.username if user else None
         )
         msg = (
-            "🔔 Готово! Ти у фан-клубі 🖤🔥"
+            "🔔 Готово! Ти у фан-клубі 🖤🔥\n\n"
+            "Підпишись ще й на наш YouTube — один тап:"
             if is_new
-            else "🖤 Ти вже з нами у фан-клубі. Дякуємо!"
+            else "🖤 Ти вже з нами. А на YouTube підписаний? 🎬"
         )
-        await query.message.reply_text(msg, reply_markup=MAIN_KEYBOARD)
+        keyboard = InlineKeyboardMarkup(
+            [[InlineKeyboardButton("🎬 Підписатись на YouTube",
+                                   url=_youtube_subscribe_url())]]
+        )
+        await query.message.reply_text(msg, reply_markup=keyboard)
         return
 
     # Відгук про конкретний трек
