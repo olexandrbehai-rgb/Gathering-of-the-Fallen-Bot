@@ -1,45 +1,45 @@
-# [Project name]
+# Gathering Of The Fallen — Telegram Bot
 
-_Replace the heading above with the project's name, and this line with one sentence describing what this app does for users._
+Telegram-бот українського онлайн-метал гурту "Gathering Of The Fallen" (Монреаль, Квебек).
+Атмосферний AI-асистент: треки, плейлисти за настроєм, релізи, live-стріми, підписка та відгуки.
 
 ## Run & Operate
 
-- `pnpm --filter @workspace/api-server run dev` — run the API server (port 5000)
-- `pnpm run typecheck` — full typecheck across all packages
-- `pnpm run build` — typecheck + build all packages
-- `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from the OpenAPI spec
-- `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
-- Required env: `DATABASE_URL` — Postgres connection string
+- Workflow `Telegram Bot` — запускає `python3 main.py` (працює 24/7, polling)
+- Required secrets: `TELEGRAM_TOKEN`, `OPENAI_API_KEY`
+- Optional env: `OPENAI_MODEL` (за замовчуванням `gpt-4o-mini`)
 
 ## Stack
 
-- pnpm workspaces, Node.js 24, TypeScript 5.9
-- API: Express 5
-- DB: PostgreSQL + Drizzle ORM
-- Validation: Zod (`zod/v4`), `drizzle-zod`
-- API codegen: Orval (from OpenAPI spec)
-- Build: esbuild (CJS bundle)
+- Python 3.11
+- `python-telegram-bot` 21.x (async, polling)
+- `openai` SDK (Chat Completions)
+- JSON-сховище: `data/subscriptions.json`, `data/feedback.json`
 
 ## Where things live
 
-_Populate as you build — short repo map plus pointers to the source-of-truth file for DB schema, API contracts, theme files, etc._
+- `main.py` — увесь бот (handlers, OpenAI, сховище, keep-alive)
+- `data/` — підписки та відгуки (створюється автоматично)
 
 ## Architecture decisions
 
-_Populate as you build — non-obvious choices a reader couldn't infer from the code (3-5 bullets)._
+- Один файл `main.py` — за специфікацією користувача.
+- Polling замість webhooks — простіше і стабільніше у Replit-середовищі.
+- Keep-alive — окремий daemon-thread з heartbeat у лог кожні 5 хв.
+- Історія діалогу зберігається у `context.user_data` (останні 16 повідомлень).
 
 ## Product
 
-_Describe the high-level user-facing capabilities of this app once they exist._
+Команди: `/start`, `/help`, `/about`, `/tracks`, `/subscribe`, `/unsubscribe`, `/feedback`.
+Постійне нижнє меню: 🎵 Треки / 🔥 Релізи / 📺 Live / 🖤 Про гурт / 🔔 Підписка / 💬 Відгуки.
+Будь-яке інше повідомлення → AI-відповідь у фірмовому темному метал-стилі.
 
 ## User preferences
 
-_Populate as you build — explicit user instructions worth remembering across sessions._
+- Мова інтерфейсу: українська.
+- Стиль: темний, емоційний, метал-естетика, з емодзі 🎸🔥🪓🕯️🦇🖤🌲.
 
 ## Gotchas
 
-_Populate as you build — sharp edges, "always run X before Y" rules._
-
-## Pointers
-
-- See the `pnpm-workspace` skill for workspace structure, TypeScript setup, and package details
+- Після зміни секретів — обов'язково перезапустити workflow `Telegram Bot`.
+- У Telegram має бути активним тільки один інстанс бота, інакше polling видасть `Conflict`.
