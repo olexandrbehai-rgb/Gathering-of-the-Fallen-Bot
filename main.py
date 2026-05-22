@@ -526,6 +526,82 @@ def _md_escape(s: str) -> str:
     return s
 
 
+# ---------------------------------------------------------------------------
+# Хелпери "чистого" чату: ховаємо попередній екран, видаляємо тапи кнопок
+# ---------------------------------------------------------------------------
+
+CLOSE_BUTTON = InlineKeyboardButton("❌ Закрити", callback_data="close")
+
+
+async def _delete_user_msg(update: Update) -> None:
+    if update.message:
+        try:
+            await update.message.delete()
+        except Exception:
+            pass
+
+
+async def _cleanup_last_section(context: ContextTypes.DEFAULT_TYPE, chat) -> None:
+    msg_id = context.user_data.pop("last_section_msg_id", None)
+    if msg_id is None:
+        return
+    try:
+        await chat.delete_message(msg_id)
+    except Exception:
+        pass
+
+
+async def _send_section(update: Update,
+                        context: ContextTypes.DEFAULT_TYPE,
+                        text: str,
+                        reply_markup=None,
+                        parse_mode=None):
+    chat = update.effective_chat
+    await _delete_user_msg(update)
+    await _cleanup_last_section(context, chat)
+    sent = await chat.send_message(
+        text, reply_markup=reply_markup, parse_mode=parse_mode,
+    )
+    context.user_data["last_section_msg_id"] = sent.message_id
+    return sent
+
+
+async def _morph_section(query,
+                         context: ContextTypes.DEFAULT_TYPE,
+                         text: str,
+                         reply_markup=None,
+                         parse_mode=None):
+    try:
+        await query.edit_message_text(
+            text, reply_markup=reply_markup, parse_mode=parse_mode,
+        )
+        context.user_data["last_section_msg_id"] = query.message.message_id
+    except Exception:
+        sent = await query.message.reply_text(
+            text, reply_markup=reply_markup, parse_mode=parse_mode,
+        )
+        context.user_data["last_section_msg_id"] = sent.message_id
+
+
+def _tracks_markup() -> InlineKeyboardMarkup:
+    buttons = []
+    for i, t in enumerate(TRACKS):
+        buttons.append(
+            [InlineKeyboardButton(f"🎵 {t['title']}", callback_data=f"track:{i}")]
+        )
+    buttons.append(
+        [InlineKeyboardButton("🎧 Плейлист за настроєм", callback_data="mood:menu")]
+    )
+    buttons.append([CLOSE_BUTTON])
+    return InlineKeyboardMarkup(buttons)
+
+
+TRACKS_HEADER = (
+    "🎵 *Треки альбому «Music Of My Soul» (2025, 21 трек)*\n"
+    "Обирай — дам посилання на стрімінги 🔥"
+)
+
+
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     name = _md_escape(user.first_name) if user and user.first_name else "брате"
@@ -570,18 +646,10 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def section_tracks(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Список треків як InlineKeyboard."""
-    buttons = []
-    for i, t in enumerate(TRACKS):
-        buttons.append(
-            [InlineKeyboardButton(f"🎵 {t['title']}", callback_data=f"track:{i}")]
-        )
-    buttons.append(
-        [InlineKeyboardButton("🎧 Плейлист за настроєм", callback_data="mood:menu")]
-    )
-    await update.message.reply_text(
-        "🎵 *Треки альбому «Music Of My Soul» (2025, 21 трек)*\n"
-        "Обирай — дам посилання на стрімінги 🔥",
-        reply_markup=InlineKeyboardMarkup(buttons),
+    await _send_section(
+        update, context,
+        TRACKS_HEADER,
+        reply_markup=_tracks_markup(),
         parse_mode=ParseMode.MARKDOWN,
     )
 
@@ -596,8 +664,9 @@ async def section_releases(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     buttons = [[InlineKeyboardButton("🔔 Підписатися", callback_data="subscribe")]]
     for name in ("YouTube", "Spotify", "Apple Music", "Bandcamp"):
         buttons.append([InlineKeyboardButton(f"▶️ {name}", url=band_url(name))])
-    await update.message.reply_text(
-        text,
+    buttons.append([CLOSE_BUTTON])
+    await _send_section(
+        update, context, text,
         reply_markup=InlineKeyboardMarkup(buttons),
         parse_mode=ParseMode.MARKDOWN,
     )
@@ -614,9 +683,10 @@ async def section_live(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     buttons = [
         [InlineKeyboardButton("▶️ YouTube", url=band_url("YouTube"))],
         [InlineKeyboardButton("🔔 Підписатися на анонси", callback_data="subscribe")],
+        [CLOSE_BUTTON],
     ]
-    await update.message.reply_text(
-        text,
+    await _send_section(
+        update, context, text,
         reply_markup=InlineKeyboardMarkup(buttons),
         parse_mode=ParseMode.MARKDOWN,
     )
@@ -634,8 +704,9 @@ async def section_about(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     buttons = []
     for name in ("YouTube", "Spotify", "Apple Music", "Bandcamp", "Instagram"):
         buttons.append([InlineKeyboardButton(f"▶️ {name}", url=band_url(name))])
-    await update.message.reply_text(
-        text,
+    buttons.append([CLOSE_BUTTON])
+    await _send_section(
+        update, context, text,
         reply_markup=InlineKeyboardMarkup(buttons),
         parse_mode=ParseMode.MARKDOWN,
     )
@@ -668,15 +739,15 @@ async def section_subscribe(
             "🖤 Ти вже у фан-клубі бота. Дякуємо, що з нами! 🔥\n\n"
             "Якщо ще не підписаний на YouTube — зроби це одним тапом:"
         )
-    keyboard = InlineKeyboardMarkup(
-        [[InlineKeyboardButton("🎬 Підписатись на YouTube",
-                               url=_youtube_subscribe_url())]]
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🎬 Підписатись на YouTube",
+                              url=_youtube_subscribe_url())],
+        [CLOSE_BUTTON],
+    ])
+    await _send_section(
+        update, context, text,
+        reply_markup=keyboard, parse_mode=ParseMode.MARKDOWN,
     )
-    await update.message.reply_text(
-        text, reply_markup=keyboard, parse_mode=ParseMode.MARKDOWN
-    )
-    # повертаємо нижнє меню окремим коротким повідомленням
-    await update.message.reply_text("🪓", reply_markup=MAIN_KEYBOARD)
 
 
 async def section_donate(
@@ -689,13 +760,14 @@ async def section_donate(
         "Дякуємо, що ти з нами у цій темряві. Без тебе не було б "
         "ні полум'я, ні звуку. 🤘"
     )
-    keyboard = InlineKeyboardMarkup(
-        [[InlineKeyboardButton("💸 Підтримати через PayPal", url=DONATE_URL)]]
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("💸 Підтримати через PayPal", url=DONATE_URL)],
+        [CLOSE_BUTTON],
+    ])
+    await _send_section(
+        update, context, text,
+        reply_markup=keyboard, parse_mode=ParseMode.MARKDOWN,
     )
-    await update.message.reply_text(
-        text, reply_markup=keyboard, parse_mode=ParseMode.MARKDOWN
-    )
-    await update.message.reply_text("🖤", reply_markup=MAIN_KEYBOARD)
 
 
 async def cmd_unsubscribe(
@@ -706,7 +778,10 @@ async def cmd_unsubscribe(
         text = "🕯️ Тебе вилучено з фан-клубу. Двері завжди відкриті — повертайся 🖤"
     else:
         text = "Ти і так не підписаний. Хочеш приєднатись? Натисни 🔔 у меню."
-    await update.message.reply_text(text, reply_markup=MAIN_KEYBOARD)
+    await _send_section(
+        update, context, text,
+        reply_markup=InlineKeyboardMarkup([[CLOSE_BUTTON]]),
+    )
 
 
 def _fan_author(msg: dict) -> str:
@@ -730,26 +805,23 @@ def _format_fan_chat() -> str:
     return "\n".join(lines)
 
 
-def _fan_chat_keyboard(open_state: bool = True) -> InlineKeyboardMarkup:
-    if open_state:
-        return InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton("✍️ Написати", callback_data="fc:write"),
-                InlineKeyboardButton("🔄 Оновити", callback_data="fc:refresh"),
-            ],
-            [InlineKeyboardButton("❌ Закрити чат", callback_data="fc:close")],
-        ])
+def _fan_chat_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🤘 Відкрити фан-чат", callback_data="fc:open")],
+        [
+            InlineKeyboardButton("✍️ Написати", callback_data="fc:write"),
+            InlineKeyboardButton("🔄 Оновити", callback_data="fc:refresh"),
+        ],
+        [InlineKeyboardButton("❌ Закрити чат", callback_data="close")],
     ])
 
 
 async def section_fanclub(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Відкриває фан-чат окремим повідомленням з кнопками."""
     context.user_data.pop("awaiting_fan_chat", None)
-    await update.message.reply_text(
+    await _send_section(
+        update, context,
         _format_fan_chat(),
-        reply_markup=_fan_chat_keyboard(open_state=True),
+        reply_markup=_fan_chat_keyboard(),
         parse_mode=ParseMode.MARKDOWN,
     )
 
@@ -758,10 +830,11 @@ async def section_feedback(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
     context.user_data["awaiting_feedback"] = True
-    await update.message.reply_text(
+    await _send_section(
+        update, context,
         "💬 Напиши свій відгук, запитання або враження від треку — "
         "наступним повідомленням. Ми читаємо все 🖤",
-        reply_markup=MAIN_KEYBOARD,
+        reply_markup=InlineKeyboardMarkup([[CLOSE_BUTTON]]),
     )
 
 
@@ -774,9 +847,10 @@ async def cmd_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     save_feedback(
         update.effective_chat.id, user.username if user else None, text
     )
-    await update.message.reply_text(
+    await _send_section(
+        update, context,
         "🔥 Дякуємо за відгук! Він уже у нашій кузні 🪓",
-        reply_markup=MAIN_KEYBOARD,
+        reply_markup=InlineKeyboardMarkup([[CLOSE_BUTTON]]),
     )
 
 
@@ -790,7 +864,22 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     await query.answer()
     data = query.data or ""
 
-    # Перегляд треку
+    # Універсальне закриття будь-якого розділу
+    if data == "close":
+        await _cleanup_last_section(context, query.message.chat)
+        return
+
+    # Повернення до списку треків
+    if data == "tracks:list":
+        await _morph_section(
+            query, context,
+            TRACKS_HEADER,
+            reply_markup=_tracks_markup(),
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        return
+
+    # Перегляд конкретного треку
     if data.startswith("track:"):
         idx = int(data.split(":", 1)[1])
         if not (0 <= idx < len(TRACKS)):
@@ -809,8 +898,11 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 InlineKeyboardButton("🍎 Apple Music", url=track_url(title, "Apple Music")),
                 InlineKeyboardButton("💬 Лишити відгук", callback_data=f"fb:{idx}"),
             ],
+            [InlineKeyboardButton("⬅️ До треків", callback_data="tracks:list")],
+            [CLOSE_BUTTON],
         ]
-        await query.message.reply_text(
+        await _morph_section(
+            query, context,
             f"🎵 *{title}*\n_Настрій: {moods}_ 🔥{hint}",
             reply_markup=InlineKeyboardMarkup(buttons),
             parse_mode=ParseMode.MARKDOWN,
@@ -823,7 +915,10 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             [InlineKeyboardButton(label, callback_data=f"mood:{key}")]
             for key, label in MOODS.items()
         ]
-        await query.message.reply_text(
+        buttons.append([InlineKeyboardButton("⬅️ До треків", callback_data="tracks:list")])
+        buttons.append([CLOSE_BUTTON])
+        await _morph_section(
+            query, context,
             "🎧 *Обери настрій — складу персональний плейлист:*",
             reply_markup=InlineKeyboardMarkup(buttons),
             parse_mode=ParseMode.MARKDOWN,
@@ -836,8 +931,9 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         if mood_key not in MOODS:
             return
 
-        # Миттєвий індикатор, щоб юзер бачив що щось відбувається
-        loading = await query.message.reply_text(
+        # Морфуємо те саме повідомлення в "loading", щоб не плодити нові
+        await _morph_section(
+            query, context,
             f"🕯️ Складаю плейлист під настрій *{MOODS[mood_key]}*...",
             parse_mode=ParseMode.MARKDOWN,
         )
@@ -860,18 +956,16 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             log.exception("mood callback ai error: %s", e)
             reply = static_mood_playlist(mood_key)
 
-        try:
-            await loading.delete()
-        except Exception:
-            pass
-        # AI-вивід шлемо як plain text, щоб Telegram не падав на парсингу Markdown
-        await query.message.reply_text(
-            reply,
-            reply_markup=MAIN_KEYBOARD,
-        )
+        # Морфуємо у фінальний результат із кнопками навігації
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🎧 Інший настрій", callback_data="mood:menu")],
+            [InlineKeyboardButton("⬅️ До треків", callback_data="tracks:list")],
+            [CLOSE_BUTTON],
+        ])
+        await _morph_section(query, context, reply, reply_markup=kb)
         return
 
-    # Підписка з inline-кнопки
+    # Підписка з inline-кнопки → морфуємо поточний розділ у "підтвердження"
     if data == "subscribe":
         user = update.effective_user
         is_new = add_subscription(
@@ -883,58 +977,30 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             if is_new
             else "🖤 Ти вже з нами. А на YouTube підписаний? 🎬"
         )
-        keyboard = InlineKeyboardMarkup(
-            [[InlineKeyboardButton("🎬 Підписатись на YouTube",
-                                   url=_youtube_subscribe_url())]]
-        )
-        await query.message.reply_text(msg, reply_markup=keyboard)
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🎬 Підписатись на YouTube",
+                                  url=_youtube_subscribe_url())],
+            [CLOSE_BUTTON],
+        ])
+        await _morph_section(query, context, msg, reply_markup=kb)
         return
 
     # --- Фан-чат ---
-    if data == "fc:open":
-        try:
-            await query.edit_message_text(
-                _format_fan_chat(),
-                reply_markup=_fan_chat_keyboard(open_state=True),
-                parse_mode=ParseMode.MARKDOWN,
-            )
-        except Exception:
-            await query.message.reply_text(
-                _format_fan_chat(),
-                reply_markup=_fan_chat_keyboard(open_state=True),
-                parse_mode=ParseMode.MARKDOWN,
-            )
-        return
-
     if data == "fc:refresh":
-        try:
-            await query.edit_message_text(
-                _format_fan_chat(),
-                reply_markup=_fan_chat_keyboard(open_state=True),
-                parse_mode=ParseMode.MARKDOWN,
-            )
-        except Exception:
-            pass
-        return
-
-    if data == "fc:close":
-        context.user_data.pop("awaiting_fan_chat", None)
-        try:
-            await query.edit_message_text(
-                "🤘 Фан-чат закрито.\nКоли захочеш повернутись — тицяй кнопку 🖤",
-                reply_markup=_fan_chat_keyboard(open_state=False),
-            )
-        except Exception:
-            pass
+        await _morph_section(
+            query, context,
+            _format_fan_chat(),
+            reply_markup=_fan_chat_keyboard(),
+            parse_mode=ParseMode.MARKDOWN,
+        )
         return
 
     if data == "fc:write":
         context.user_data["awaiting_fan_chat"] = True
-        await query.message.reply_text(
-            "✍️ Напиши своє повідомлення наступним рядком — "
-            "і воно одразу зʼявиться у фан-чаті 🤘\n"
-            "_(щоб скасувати — просто натисни кнопку меню)_",
-            parse_mode=ParseMode.MARKDOWN,
+        await query.answer(
+            "✍️ Напиши повідомлення наступним рядком — "
+            "і воно зʼявиться у фан-чаті 🤘",
+            show_alert=True,
         )
         return
 
@@ -946,10 +1012,9 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         track = TRACKS[idx]
         context.user_data["awaiting_feedback"] = True
         context.user_data["feedback_track"] = track["title"]
-        await query.message.reply_text(
-            f"💬 Напиши свій відгук про трек *{track['title']}* "
-            "наступним повідомленням 🖤",
-            parse_mode=ParseMode.MARKDOWN,
+        await query.answer(
+            f"💬 Напиши відгук про «{track['title']}» наступним повідомленням 🖤",
+            show_alert=True,
         )
         return
 
@@ -989,13 +1054,10 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             user.first_name if user else None,
             text,
         )
-        await update.message.reply_text(
-            "🤘 Твоє повідомлення у фан-чаті 🖤",
-            reply_markup=MAIN_KEYBOARD,
-        )
-        await update.message.reply_text(
+        await _send_section(
+            update, context,
             _format_fan_chat(),
-            reply_markup=_fan_chat_keyboard(open_state=True),
+            reply_markup=_fan_chat_keyboard(),
             parse_mode=ParseMode.MARKDOWN,
         )
         return
@@ -1007,10 +1069,10 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         save_feedback(
             update.effective_chat.id, user.username if user else None, full
         )
-        await update.message.reply_text(
-            "🔥 Дякую! Твій голос почуто. Хочеш послухати ще трек? "
-            "Натисни 🎵 у меню 🪓",
-            reply_markup=MAIN_KEYBOARD,
+        await _send_section(
+            update, context,
+            "🔥 Дякую! Твій голос почуто 🪓",
+            reply_markup=InlineKeyboardMarkup([[CLOSE_BUTTON]]),
         )
         return
 
