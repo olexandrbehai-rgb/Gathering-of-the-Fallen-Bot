@@ -66,6 +66,8 @@ DATA_DIR = Path(__file__).parent / "data"
 DATA_DIR.mkdir(exist_ok=True)
 SUBS_FILE = DATA_DIR / "subscriptions.json"
 FEEDBACK_FILE = DATA_DIR / "feedback.json"
+FAN_CHAT_FILE = DATA_DIR / "fan_chat.json"
+FAN_CHAT_LIMIT = 15  # скільки останніх повідомлень показуємо у чаті
 
 openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 
@@ -323,6 +325,7 @@ BTN_TRACKS    = "🎵 Треки та плейлисти"
 BTN_RELEASES  = "🔥 Нові релізи"
 BTN_LIVE      = "📺 Онлайн-стріми / Live"
 BTN_ABOUT     = "🖤 Про гурт"
+BTN_FANCLUB   = "🤘 Фан-чат"
 BTN_SUBSCRIBE = "🔔 Фан-клуб (підписка)"
 BTN_FEEDBACK  = "💬 Запитання / Відгуки"
 BTN_DONATE    = "🪙 Підтримати копійчиною"
@@ -333,6 +336,7 @@ MAIN_KEYBOARD = ReplyKeyboardMarkup(
     [
         [KeyboardButton(BTN_TRACKS), KeyboardButton(BTN_RELEASES)],
         [KeyboardButton(BTN_LIVE), KeyboardButton(BTN_ABOUT)],
+        [KeyboardButton(BTN_FANCLUB)],
         [KeyboardButton(BTN_SUBSCRIBE), KeyboardButton(BTN_FEEDBACK)],
         [KeyboardButton(BTN_DONATE)],
     ],
@@ -395,6 +399,29 @@ def remove_subscription(chat_id: int) -> bool:
             _save_json(SUBS_FILE, subs)
             return True
         return False
+
+
+def load_fan_chat() -> list[dict]:
+    return _load_json(FAN_CHAT_FILE, [])
+
+
+def add_fan_message(chat_id: int, username: str | None,
+                    first_name: str | None, text: str) -> dict:
+    with _lock:
+        items = _load_json(FAN_CHAT_FILE, [])
+        msg = {
+            "chat_id": chat_id,
+            "username": username,
+            "first_name": first_name,
+            "text": text,
+            "ts": datetime.utcnow().isoformat(),
+        }
+        items.append(msg)
+        # тримаємо лише останні 200 — щоб файл не розпухав
+        if len(items) > 200:
+            items = items[-200:]
+        _save_json(FAN_CHAT_FILE, items)
+        return msg
 
 
 def save_feedback(chat_id: int, username: str | None, text: str) -> None:
@@ -521,10 +548,14 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/start — головне меню\n"
         "/help — ця підказка\n"
         "/about — про гурт\n"
-        "/tracks — треки\n"
+        "/tracks — треки та плейлисти\n"
+        "/fanclub — 🤘 фан-чат (відкрити/закрити)\n"
         "/subscribe — підписка на новини\n"
         "/unsubscribe — відписка\n"
         "/feedback <текст> — лишити відгук\n\n"
+        "🤘 *Фан-чат*: відкривається кнопкою, "
+        "натисни *✍️ Написати* — і твоє повідомлення зʼявиться у спільному чаті фанів. "
+        "Кнопкою *❌ Закрити чат* — згортаєш.\n\n"
         "Або просто напиши мені будь-що — я відповім 🖤"
     )
     await update.message.reply_text(
@@ -678,6 +709,51 @@ async def cmd_unsubscribe(
     await update.message.reply_text(text, reply_markup=MAIN_KEYBOARD)
 
 
+def _fan_author(msg: dict) -> str:
+    name = msg.get("first_name") or msg.get("username") or "Анонім 🦇"
+    return name
+
+
+def _format_fan_chat() -> str:
+    items = load_fan_chat()[-FAN_CHAT_LIMIT:]
+    if not items:
+        return (
+            "🤘 *Фан-чат порожній.*\n"
+            "Будь першим — натисни *✍️ Написати* і кинь повідомлення для всієї зграї 🖤"
+        )
+    lines = ["🤘 *Фан-чат* (останні повідомлення)\n"]
+    for m in items:
+        author = _md_escape(_fan_author(m))
+        text = _md_escape(m.get("text", ""))
+        lines.append(f"🪓 *{author}*: {text}")
+    lines.append("\n_Тільки текст. Без спаму. Поважаймо одне одного 🖤_")
+    return "\n".join(lines)
+
+
+def _fan_chat_keyboard(open_state: bool = True) -> InlineKeyboardMarkup:
+    if open_state:
+        return InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("✍️ Написати", callback_data="fc:write"),
+                InlineKeyboardButton("🔄 Оновити", callback_data="fc:refresh"),
+            ],
+            [InlineKeyboardButton("❌ Закрити чат", callback_data="fc:close")],
+        ])
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🤘 Відкрити фан-чат", callback_data="fc:open")],
+    ])
+
+
+async def section_fanclub(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Відкриває фан-чат окремим повідомленням з кнопками."""
+    context.user_data.pop("awaiting_fan_chat", None)
+    await update.message.reply_text(
+        _format_fan_chat(),
+        reply_markup=_fan_chat_keyboard(open_state=True),
+        parse_mode=ParseMode.MARKDOWN,
+    )
+
+
 async def section_feedback(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
@@ -814,6 +890,54 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await query.message.reply_text(msg, reply_markup=keyboard)
         return
 
+    # --- Фан-чат ---
+    if data == "fc:open":
+        try:
+            await query.edit_message_text(
+                _format_fan_chat(),
+                reply_markup=_fan_chat_keyboard(open_state=True),
+                parse_mode=ParseMode.MARKDOWN,
+            )
+        except Exception:
+            await query.message.reply_text(
+                _format_fan_chat(),
+                reply_markup=_fan_chat_keyboard(open_state=True),
+                parse_mode=ParseMode.MARKDOWN,
+            )
+        return
+
+    if data == "fc:refresh":
+        try:
+            await query.edit_message_text(
+                _format_fan_chat(),
+                reply_markup=_fan_chat_keyboard(open_state=True),
+                parse_mode=ParseMode.MARKDOWN,
+            )
+        except Exception:
+            pass
+        return
+
+    if data == "fc:close":
+        context.user_data.pop("awaiting_fan_chat", None)
+        try:
+            await query.edit_message_text(
+                "🤘 Фан-чат закрито.\nКоли захочеш повернутись — тицяй кнопку 🖤",
+                reply_markup=_fan_chat_keyboard(open_state=False),
+            )
+        except Exception:
+            pass
+        return
+
+    if data == "fc:write":
+        context.user_data["awaiting_fan_chat"] = True
+        await query.message.reply_text(
+            "✍️ Напиши своє повідомлення наступним рядком — "
+            "і воно одразу зʼявиться у фан-чаті 🤘\n"
+            "_(щоб скасувати — просто натисни кнопку меню)_",
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        return
+
     # Відгук про конкретний трек
     if data.startswith("fb:"):
         idx = int(data.split(":", 1)[1])
@@ -845,12 +969,35 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         BTN_RELEASES: section_releases,
         BTN_LIVE: section_live,
         BTN_ABOUT: section_about,
+        BTN_FANCLUB: section_fanclub,
         BTN_SUBSCRIBE: section_subscribe,
         BTN_FEEDBACK: section_feedback,
         BTN_DONATE: section_donate,
     }
     if text in routes:
+        # натиснули будь-яку кнопку меню — скасовуємо режим "пишу у фан-чат"
+        context.user_data.pop("awaiting_fan_chat", None)
         await routes[text](update, context)
+        return
+
+    # Повідомлення у фан-чат
+    if context.user_data.pop("awaiting_fan_chat", False):
+        user = update.effective_user
+        add_fan_message(
+            update.effective_chat.id,
+            user.username if user else None,
+            user.first_name if user else None,
+            text,
+        )
+        await update.message.reply_text(
+            "🤘 Твоє повідомлення у фан-чаті 🖤",
+            reply_markup=MAIN_KEYBOARD,
+        )
+        await update.message.reply_text(
+            _format_fan_chat(),
+            reply_markup=_fan_chat_keyboard(open_state=True),
+            parse_mode=ParseMode.MARKDOWN,
+        )
         return
 
     if context.user_data.pop("awaiting_feedback", False):
@@ -931,6 +1078,7 @@ def build_app() -> Application:
     app.add_handler(CommandHandler("subscribe", section_subscribe))
     app.add_handler(CommandHandler("unsubscribe", cmd_unsubscribe))
     app.add_handler(CommandHandler("feedback", cmd_feedback))
+    app.add_handler(CommandHandler("fanclub", section_fanclub))
 
     app.add_handler(CallbackQueryHandler(on_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
