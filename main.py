@@ -939,15 +939,17 @@ def build_app() -> Application:
     return app
 
 
-def main() -> None:
-    asyncio.set_event_loop(asyncio.new_event_loop())
+async def main() -> None:
     start_keep_alive()
     app = build_app()
     log.info("🔥 Bot is starting (model=%s)...", OPENAI_MODEL)
-    app.run_polling(
+    await app.initialize()
+    await app.start()
+    await app.updater.start_polling(
         allowed_updates=Update.ALL_TYPES,
         drop_pending_updates=True,
     )
+    await app.updater.idle()
 
 
 if __name__ == "__main__":
