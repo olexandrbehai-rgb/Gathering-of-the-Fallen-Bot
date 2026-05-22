@@ -321,28 +321,42 @@ def track_url(track_title: str, platform: str) -> str:
 # Меню
 # ---------------------------------------------------------------------------
 
-BTN_TRACKS    = "🎵 Треки та плейлисти"
-BTN_RELEASES  = "🔥 Нові релізи"
-BTN_LIVE      = "📺 Онлайн-стріми / Live"
-BTN_ABOUT     = "🖤 Про гурт"
-BTN_FANCLUB   = "🤘 Фан-чат"
-BTN_SUBSCRIBE = "🔔 Фан-клуб (підписка)"
-BTN_FEEDBACK  = "💬 Запитання / Відгуки"
-BTN_DONATE    = "🪙 Підтримати копійчиною"
+BTN_TRACKS    = "🎵 Треки"
+BTN_RELEASES  = "🔥 Релізи"
+BTN_LIVE      = "📺 Live"
+BTN_ABOUT     = "🖤 Гурт"
+BTN_FANCLUB   = "🤘 Чат"
+BTN_SUBSCRIBE = "🔔 Підписка"
+BTN_FEEDBACK  = "💬 Відгук"
+BTN_DONATE    = "🪙 Донат"
 
 DONATE_URL = "https://paypal.me/Sasha89Alex"
 
 MAIN_KEYBOARD = ReplyKeyboardMarkup(
     [
-        [KeyboardButton(BTN_TRACKS), KeyboardButton(BTN_RELEASES)],
-        [KeyboardButton(BTN_LIVE), KeyboardButton(BTN_ABOUT)],
-        [KeyboardButton(BTN_FANCLUB)],
-        [KeyboardButton(BTN_SUBSCRIBE), KeyboardButton(BTN_FEEDBACK)],
-        [KeyboardButton(BTN_DONATE)],
+        [KeyboardButton(BTN_TRACKS), KeyboardButton(BTN_RELEASES), KeyboardButton(BTN_LIVE)],
+        [KeyboardButton(BTN_ABOUT), KeyboardButton(BTN_FANCLUB), KeyboardButton(BTN_SUBSCRIBE)],
+        [KeyboardButton(BTN_FEEDBACK), KeyboardButton(BTN_DONATE)],
     ],
     resize_keyboard=True,
     is_persistent=True,
+    input_field_placeholder="⛧ Напиши або тицяй кнопку...",
 )
+
+# ---------------------------------------------------------------------------
+# Фірмовий стиль
+# ---------------------------------------------------------------------------
+
+BRAND_DIVIDER = "═══ ⛧ ═══"
+BRAND_SIGN    = "⛧ Gathering Of The Fallen ⛧"
+
+HERO_IMAGE   = str(Path(__file__).parent / "attached_assets" / "6_1779419094348.png")
+EMBLEM_IMAGE = str(Path(__file__).parent / "attached_assets" / "3_1779419094347.png")
+
+
+def _brand(text: str) -> str:
+    """Огортає текст розділу у фірмовий стиль гурту."""
+    return f"{BRAND_DIVIDER}\n{text}\n\n_{BRAND_SIGN}_"
 
 # ---------------------------------------------------------------------------
 # JSON-сховище
@@ -555,13 +569,27 @@ async def _send_section(update: Update,
                         context: ContextTypes.DEFAULT_TYPE,
                         text: str,
                         reply_markup=None,
-                        parse_mode=None):
+                        parse_mode=None,
+                        photo: str | None = None):
     chat = update.effective_chat
     await _delete_user_msg(update)
     await _cleanup_last_section(context, chat)
-    sent = await chat.send_message(
-        text, reply_markup=reply_markup, parse_mode=parse_mode,
-    )
+    sent = None
+    if photo:
+        try:
+            with open(photo, "rb") as f:
+                sent = await chat.send_photo(
+                    photo=f,
+                    caption=text,
+                    reply_markup=reply_markup,
+                    parse_mode=parse_mode,
+                )
+        except Exception as e:
+            log.warning("send_photo failed (%s) — fallback to text", e)
+    if sent is None:
+        sent = await chat.send_message(
+            text, reply_markup=reply_markup, parse_mode=parse_mode,
+        )
     context.user_data["last_section_msg_id"] = sent.message_id
     return sent
 
@@ -596,8 +624,9 @@ def _tracks_markup() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(buttons)
 
 
-TRACKS_HEADER = (
-    "🎵 *Треки альбому «Music Of My Soul» (2025, 21 трек)*\n"
+TRACKS_HEADER = _brand(
+    "🎵 *Треки альбому «Music Of My Soul»*\n"
+    "_(2025, 21 трек)_\n\n"
     "Обирай — дам посилання на стрімінги 🔥"
 )
 
@@ -605,16 +634,20 @@ TRACKS_HEADER = (
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     name = _md_escape(user.first_name) if user and user.first_name else "брате"
-    text = (
-        f"🖤 Вітаю, {name}!\n\n"
-        f"Ти потрапив у простір *{BAND_NAME}* — "
+    caption = (
+        f"{BRAND_DIVIDER}\n"
+        f"🖤 Вітаю, *{name}*.\n\n"
+        f"Ти у просторі *{BAND_NAME}* —\n"
         "українського онлайн-метал гурту з Монреаля 🇨🇦🇺🇦\n\n"
-        "Мелодійний death / atmospheric / folk-metal про еміграцію, "
-        "пам'ять і силу духу 🔥🪓\n\n"
-        "Обирай розділ нижче або просто напиши мені — я твій провідник у нашому світі."
+        "Мелодійний death / atmospheric / folk-metal\n"
+        "про еміграцію, пам'ять і силу духу 🔥🪓\n\n"
+        f"_{BRAND_SIGN}_"
     )
-    await update.message.reply_text(
-        text, reply_markup=MAIN_KEYBOARD, parse_mode=ParseMode.MARKDOWN
+    await _send_section(
+        update, context, caption,
+        reply_markup=MAIN_KEYBOARD,
+        parse_mode=ParseMode.MARKDOWN,
+        photo=HERO_IMAGE,
     )
 
 
@@ -655,11 +688,11 @@ async def section_tracks(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 
 async def section_releases(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    text = (
+    text = _brand(
         "🔥 *Нові релізи*\n\n"
         "• Альбом *Music Of My Soul* (2025) — 21 трек українською 🪓\n"
         "• Сингли 2026: серія нових треків про еміграцію та силу духу 🌲\n\n"
-        "Підпишись 🔔 — і бот сам надішле тобі сповіщення, коли вийде новий реліз."
+        "Підпишись 🔔 — і бот сам надішле сповіщення про новий реліз."
     )
     buttons = [[InlineKeyboardButton("🔔 Підписатися", callback_data="subscribe")]]
     for name in ("YouTube", "Spotify", "Apple Music", "Bandcamp"):
@@ -673,7 +706,7 @@ async def section_releases(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 
 async def section_live(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    text = (
+    text = _brand(
         "📺 *Онлайн-стріми та Live*\n\n"
         "Ми — онлайн-гурт з Квебеку 🇨🇦, тож live відбуваються в мережі: "
         "YouTube-стріми, listening-сесії, спільне прослуховування з фанами 🕯️\n\n"
@@ -693,13 +726,14 @@ async def section_live(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 
 async def section_about(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    text = (
+    text = _brand(
         f"🖤 *{BAND_NAME}*\n\n"
         "Український онлайн-метал гурт з Монреаля (Квебек, Канада) 🇨🇦🇺🇦\n\n"
         "Жанр: melodic death / atmospheric / folk-metal 🪓🌲\n\n"
         "Теми: еміграція, ностальгія за Україною, пам'ять про загиблих, "
-        "сила духу, українська міфологія — Валькірія, Козак, попіл, вогонь 🔥\n\n"
-        "Музика народжується дистанційно — у різних кутках світу, але з одним серцем."
+        "сила духу, українська міфологія 🔥\n\n"
+        "Музика народжується дистанційно — у різних кутках світу, "
+        "але з одним серцем."
     )
     buttons = []
     for name in ("YouTube", "Spotify", "Apple Music", "Bandcamp", "Instagram"):
@@ -709,6 +743,7 @@ async def section_about(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         update, context, text,
         reply_markup=InlineKeyboardMarkup(buttons),
         parse_mode=ParseMode.MARKDOWN,
+        photo=EMBLEM_IMAGE,
     )
 
 
@@ -726,17 +761,16 @@ async def section_subscribe(
     chat_id = update.effective_chat.id
     is_new = add_subscription(chat_id, user.username if user else None)
     if is_new:
-        text = (
+        text = _brand(
             f"🔔 Вітаємо у фан-клубі *{BAND_NAME}*! 🖤🔥\n\n"
-            "Бот тепер сам надсилатиме тобі сповіщення про нові релізи та стріми.\n\n"
-            "👇 І ще один крок — *підпишись на наш YouTube*, "
-            "щоб не пропустити жодного кліпу. Кнопка нижче одразу відкриє "
-            "віконце підтвердження підписки 🎬\n\n"
+            "Бот тепер сам надсилатиме сповіщення про нові релізи та стріми.\n\n"
+            "👇 Ще один крок — *підпишись на наш YouTube*, "
+            "щоб не пропустити жодного кліпу 🎬\n\n"
             "Щоб відписатись від бота — /unsubscribe"
         )
     else:
-        text = (
-            "🖤 Ти вже у фан-клубі бота. Дякуємо, що з нами! 🔥\n\n"
+        text = _brand(
+            "🖤 Ти вже у фан-клубі бота. Дякуємо, що з нами 🔥\n\n"
             "Якщо ще не підписаний на YouTube — зроби це одним тапом:"
         )
     keyboard = InlineKeyboardMarkup([
@@ -753,12 +787,11 @@ async def section_subscribe(
 async def section_donate(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
-    text = (
+    text = _brand(
         "🪙 *Підтримай нас копійчиною* 🖤🔥\n\n"
         "Кожна копійка йде на репетиції, запис нових треків, "
         "струни, барабанні палички і свічки у студії 🕯️🎸\n\n"
-        "Дякуємо, що ти з нами у цій темряві. Без тебе не було б "
-        "ні полум'я, ні звуку. 🤘"
+        "Без тебе не було б ні полум'я, ні звуку. 🤘"
     )
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("💸 Підтримати через PayPal", url=DONATE_URL)],
@@ -792,17 +825,17 @@ def _fan_author(msg: dict) -> str:
 def _format_fan_chat() -> str:
     items = load_fan_chat()[-FAN_CHAT_LIMIT:]
     if not items:
-        return (
+        body = (
             "🤘 *Фан-чат порожній.*\n"
-            "Будь першим — натисни *✍️ Написати* і кинь повідомлення для всієї зграї 🖤"
+            "Будь першим — натисни *✍️ Написати* і кинь повідомлення для зграї 🖤"
         )
-    lines = ["🤘 *Фан-чат* (останні повідомлення)\n"]
+        return _brand(body)
+    lines = ["🤘 *Фан-чат* — останні повідомлення\n"]
     for m in items:
         author = _md_escape(_fan_author(m))
         text = _md_escape(m.get("text", ""))
         lines.append(f"🪓 *{author}*: {text}")
-    lines.append("\n_Тільки текст. Без спаму. Поважаймо одне одного 🖤_")
-    return "\n".join(lines)
+    return _brand("\n".join(lines))
 
 
 def _fan_chat_keyboard() -> InlineKeyboardMarkup:
