@@ -954,7 +954,7 @@ async def main() -> None:
 
 if __name__ == "__main__":
     try:
-        main()
+        asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
         log.info("👋 Bot stopped.")
     except Exception as e:
