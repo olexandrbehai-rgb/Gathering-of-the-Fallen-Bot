@@ -326,21 +326,23 @@ BTN_TRACKS    = "🎵 Треки"
 BTN_RELEASES  = "🔥 Релізи"
 BTN_LIVE      = "📺 Live"
 BTN_ABOUT     = "🖤 Гурт"
-BTN_FANCLUB   = "🤘 Чат"
+BTN_FANCLUB   = "🕯️ Біля вогнища"
 BTN_SUBSCRIBE = "🔔 Підписка"
 BTN_FEEDBACK  = "💬 Відгук"
 BTN_DONATE    = "🪙 Донат"
 
 DONATE_URL = "https://paypal.me/Sasha89Alex"
 
-# Постійна клавіатура — лише ОДНА компактна кнопка-перемикач меню.
-# Тап → відкриває inline-меню; ще тап → ховає.
+# Постійна клавіатура — 2 кнопки: меню + швидкий доступ до фан-чату.
 MAIN_KEYBOARD = ReplyKeyboardMarkup(
-    [[KeyboardButton(BTN_MENU)]],
+    [[KeyboardButton(BTN_MENU), KeyboardButton(BTN_FANCLUB)]],
     resize_keyboard=True,
     is_persistent=True,
-    input_field_placeholder="⛧ Напиши або тицяй ☰ Меню",
+    input_field_placeholder="⛧ Напиши або тицяй кнопку",
 )
+
+# Скільки повідомлень фан-чату на одну сторінку
+FAN_CHAT_PAGE_SIZE = 8
 
 # ---------------------------------------------------------------------------
 # Фірмовий стиль
@@ -872,39 +874,69 @@ def _fan_author(msg: dict) -> str:
     return name
 
 
-def _format_fan_chat() -> str:
-    items = load_fan_chat()[-FAN_CHAT_LIMIT:]
-    if not items:
-        body = (
-            "🤘 *Фан-чат порожній.*\n"
-            "Будь першим — натисни *✍️ Написати* і кинь повідомлення для зграї 🖤"
+def _format_fan_chat(page: int = 0) -> tuple[str, int, int]:
+    """Повертає (текст_сторінки, поточна_сторінка, всього_сторінок).
+
+    Сторінка 0 — найсвіжіші повідомлення. Більший номер сторінки —
+    глибше у минуле. Усередині сторінки — хронологічно (старі → нові).
+    """
+    items = load_fan_chat()
+    total = len(items)
+    if total == 0:
+        empty = (
+            "🕯️ *Біля вогнища тихо...*\n"
+            "Кинь першу іскру — натисни *✍️ Написати* і скажи щось зграї 🪵🔥"
         )
-        return _brand(body)
-    lines = ["🤘 *Фан-чат* — останні повідомлення\n"]
-    for m in items:
+        return _brand(empty), 0, 1
+
+    pages = max(1, (total + FAN_CHAT_PAGE_SIZE - 1) // FAN_CHAT_PAGE_SIZE)
+    page = max(0, min(page, pages - 1))
+    end = total - page * FAN_CHAT_PAGE_SIZE
+    start = max(0, end - FAN_CHAT_PAGE_SIZE)
+    chunk = items[start:end]
+
+    header = (
+        f"🕯️ *Біля вогнища* 🪵🔥\n"
+        f"_сторінка {page + 1} з {pages} · усього повідомлень: {total}_\n"
+    )
+    body = []
+    for m in chunk:
         author = _md_escape(_fan_author(m))
         text = _md_escape(m.get("text", ""))
-        lines.append(f"🪓 *{author}*: {text}")
-    return _brand("\n".join(lines))
+        body.append(f"🪵 *{author}*: {text}")
+
+    return _brand(header + "\n" + "\n".join(body)), page, pages
 
 
-def _fan_chat_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("✍️ Написати", callback_data="fc:write"),
-            InlineKeyboardButton("🔄 Оновити", callback_data="fc:refresh"),
-        ],
-        [InlineKeyboardButton("❌ Закрити чат", callback_data="close")],
+def _fan_chat_keyboard(page: int = 0, pages: int = 1) -> InlineKeyboardMarkup:
+    rows = []
+    nav = []
+    # ⬅️ Старіші — це наступна сторінка (глибше у минуле)
+    if page < pages - 1:
+        nav.append(InlineKeyboardButton("⬅️ Старіші", callback_data=f"fc:page:{page + 1}"))
+    # ➡️ Новіші — попередня сторінка (ближче до сьогодні)
+    if page > 0:
+        nav.append(InlineKeyboardButton("➡️ Новіші", callback_data=f"fc:page:{page - 1}"))
+    if nav:
+        rows.append(nav)
+    rows.append([
+        InlineKeyboardButton("✍️ Написати", callback_data="fc:write"),
+        InlineKeyboardButton("🔄 Оновити", callback_data=f"fc:page:{page}"),
     ])
+    if pages > 1 and page != 0:
+        rows.append([InlineKeyboardButton("⏮ До найсвіжіших", callback_data="fc:page:0")])
+    rows.append([InlineKeyboardButton("❌ Сховати", callback_data="close")])
+    return InlineKeyboardMarkup(rows)
 
 
 async def section_fanclub(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Відкриває фан-чат окремим повідомленням з кнопками."""
+    """Відкриває фан-чат на сторінці зі свіжими повідомленнями."""
     context.user_data.pop("awaiting_fan_chat", None)
+    text, page, pages = _format_fan_chat(0)
     await _send_section(
         update, context,
-        _format_fan_chat(),
-        reply_markup=_fan_chat_keyboard(),
+        text,
+        reply_markup=_fan_chat_keyboard(page, pages),
         parse_mode=ParseMode.MARKDOWN,
     )
 
@@ -1092,12 +1124,17 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await _morph_section(query, context, msg, reply_markup=kb)
         return
 
-    # --- Фан-чат ---
-    if data == "fc:refresh":
+    # --- Фан-чат (біля вогнища) ---
+    if data == "fc:refresh" or data.startswith("fc:page:"):
+        try:
+            page = int(data.split(":", 2)[2]) if data.startswith("fc:page:") else 0
+        except Exception:
+            page = 0
+        text, page, pages = _format_fan_chat(page)
         await _morph_section(
             query, context,
-            _format_fan_chat(),
-            reply_markup=_fan_chat_keyboard(),
+            text,
+            reply_markup=_fan_chat_keyboard(page, pages),
             parse_mode=ParseMode.MARKDOWN,
         )
         return
@@ -1106,7 +1143,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         context.user_data["awaiting_fan_chat"] = True
         await query.answer(
             "✍️ Напиши повідомлення наступним рядком — "
-            "і воно зʼявиться у фан-чаті 🤘",
+            "воно лишиться біля нашого вогнища 🪵🔥",
             show_alert=True,
         )
         return
@@ -1168,10 +1205,11 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             user.first_name if user else None,
             text,
         )
+        rendered, page, pages = _format_fan_chat(0)
         await _send_section(
             update, context,
-            _format_fan_chat(),
-            reply_markup=_fan_chat_keyboard(),
+            rendered,
+            reply_markup=_fan_chat_keyboard(page, pages),
             parse_mode=ParseMode.MARKDOWN,
         )
         return
