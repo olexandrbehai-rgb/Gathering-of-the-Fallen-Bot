@@ -54,6 +54,13 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 log = logging.getLogger("gotf-bot")
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
+# ID адміна (власник гурту). Якщо задано — усі повідомлення від людей
+# будуть пересилатись у цей чат. Команда /whoami підкаже свій ID.
+_admin_raw = os.environ.get("ADMIN_CHAT_ID", "").strip()
+try:
+    ADMIN_CHAT_ID: int | None = int(_admin_raw) if _admin_raw else None
+except ValueError:
+    ADMIN_CHAT_ID = None
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
 
@@ -67,7 +74,6 @@ DATA_DIR.mkdir(exist_ok=True)
 SUBS_FILE = DATA_DIR / "subscriptions.json"
 FEEDBACK_FILE = DATA_DIR / "feedback.json"
 FAN_CHAT_FILE = DATA_DIR / "fan_chat.json"
-FAN_CHAT_LIMIT = 15  # скільки останніх повідомлень показуємо у чаті
 
 openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 
@@ -341,9 +347,6 @@ MAIN_KEYBOARD = ReplyKeyboardMarkup(
     input_field_placeholder="⛧ Напиши або тицяй кнопку",
 )
 
-# Скільки повідомлень фан-чату на одну сторінку
-FAN_CHAT_PAGE_SIZE = 8
-
 # ---------------------------------------------------------------------------
 # Фірмовий стиль
 # ---------------------------------------------------------------------------
@@ -546,6 +549,7 @@ def _md_escape(s: str) -> str:
 # ---------------------------------------------------------------------------
 
 CLOSE_BUTTON = InlineKeyboardButton("❌ Закрити", callback_data="close")
+BACK_BUTTON  = InlineKeyboardButton("◀️ Назад", callback_data="back")
 
 
 async def _delete_user_msg(update: Update) -> None:
@@ -557,6 +561,12 @@ async def _delete_user_msg(update: Update) -> None:
 
 
 async def _cleanup_last_section(context: ContextTypes.DEFAULT_TYPE, chat) -> None:
+    # Багатоповідомлювальні розділи (фан-чат) — чистимо весь список
+    for mid in context.user_data.pop("fan_chat_msg_ids", []) or []:
+        try:
+            await chat.delete_message(mid)
+        except Exception:
+            pass
     msg_id = context.user_data.pop("last_section_msg_id", None)
     if msg_id is None:
         return
@@ -564,6 +574,62 @@ async def _cleanup_last_section(context: ContextTypes.DEFAULT_TYPE, chat) -> Non
         await chat.delete_message(msg_id)
     except Exception:
         pass
+
+
+def _chunk_lines(lines: list[str], max_chars: int = 3500) -> list[str]:
+    """Розбиває список рядків на блоки по `max_chars` символів."""
+    chunks: list[str] = []
+    cur: list[str] = []
+    cur_len = 0
+    for line in lines:
+        ln = len(line) + 1
+        if cur and cur_len + ln > max_chars:
+            chunks.append("\n".join(cur))
+            cur = [line]
+            cur_len = ln
+        else:
+            cur.append(line)
+            cur_len += ln
+    if cur:
+        chunks.append("\n".join(cur))
+    return chunks
+
+
+async def _forward_to_admin(context: ContextTypes.DEFAULT_TYPE,
+                            update: Update, kind: str) -> None:
+    """Пересилає повідомлення користувача адміну + коротка мета."""
+    if not ADMIN_CHAT_ID:
+        return
+    user = update.effective_user
+    if not user or user.id == ADMIN_CHAT_ID:
+        return
+    chat = update.effective_chat
+    msg = update.message
+    if not msg:
+        return
+    try:
+        try:
+            await context.bot.forward_message(
+                chat_id=ADMIN_CHAT_ID,
+                from_chat_id=chat.id,
+                message_id=msg.message_id,
+            )
+        except Exception:
+            pass
+        name = _md_escape(user.full_name or user.first_name or "Анонім")
+        uname = _md_escape(f"@{user.username}") if user.username else "_без username_"
+        snippet = _md_escape((msg.text or "")[:400])
+        meta = (
+            f"📨 *{_md_escape(kind)}*\n"
+            f"👤 {name} · {uname}\n"
+            f"🆔 `{user.id}`\n"
+            f"💬 {snippet}"
+        )
+        await context.bot.send_message(
+            ADMIN_CHAT_ID, meta, parse_mode=ParseMode.MARKDOWN
+        )
+    except Exception as e:
+        log.warning("forward_to_admin failed: %s", e)
 
 
 async def _close_menu(context: ContextTypes.DEFAULT_TYPE, chat) -> None:
@@ -672,7 +738,7 @@ def _tracks_markup() -> InlineKeyboardMarkup:
     buttons.append(
         [InlineKeyboardButton("🎧 Плейлист за настроєм", callback_data="mood:menu")]
     )
-    buttons.append([CLOSE_BUTTON])
+    buttons.append([BACK_BUTTON, CLOSE_BUTTON])
     return InlineKeyboardMarkup(buttons)
 
 
@@ -749,7 +815,7 @@ async def section_releases(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     buttons = [[InlineKeyboardButton("🔔 Підписатися", callback_data="subscribe")]]
     for name in ("YouTube", "Spotify", "Apple Music", "Bandcamp"):
         buttons.append([InlineKeyboardButton(f"▶️ {name}", url=band_url(name))])
-    buttons.append([CLOSE_BUTTON])
+    buttons.append([BACK_BUTTON, CLOSE_BUTTON])
     await _send_section(
         update, context, text,
         reply_markup=InlineKeyboardMarkup(buttons),
@@ -768,7 +834,7 @@ async def section_live(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     buttons = [
         [InlineKeyboardButton("▶️ YouTube", url=band_url("YouTube"))],
         [InlineKeyboardButton("🔔 Підписатися на анонси", callback_data="subscribe")],
-        [CLOSE_BUTTON],
+        [BACK_BUTTON, CLOSE_BUTTON],
     ]
     await _send_section(
         update, context, text,
@@ -790,7 +856,7 @@ async def section_about(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     buttons = []
     for name in ("YouTube", "Spotify", "Apple Music", "Bandcamp", "Instagram"):
         buttons.append([InlineKeyboardButton(f"▶️ {name}", url=band_url(name))])
-    buttons.append([CLOSE_BUTTON])
+    buttons.append([BACK_BUTTON, CLOSE_BUTTON])
     await _send_section(
         update, context, text,
         reply_markup=InlineKeyboardMarkup(buttons),
@@ -828,7 +894,7 @@ async def section_subscribe(
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("🎬 Підписатись на YouTube",
                               url=_youtube_subscribe_url())],
-        [CLOSE_BUTTON],
+        [BACK_BUTTON, CLOSE_BUTTON],
     ])
     await _send_section(
         update, context, text,
@@ -847,7 +913,7 @@ async def section_donate(
     )
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("💸 Підтримати через PayPal", url=DONATE_URL)],
-        [CLOSE_BUTTON],
+        [BACK_BUTTON, CLOSE_BUTTON],
     ])
     await _send_section(
         update, context, text,
@@ -865,7 +931,7 @@ async def cmd_unsubscribe(
         text = "Ти і так не підписаний. Хочеш приєднатись? Натисни 🔔 у меню."
     await _send_section(
         update, context, text,
-        reply_markup=InlineKeyboardMarkup([[CLOSE_BUTTON]]),
+        reply_markup=InlineKeyboardMarkup([[BACK_BUTTON, CLOSE_BUTTON]]),
     )
 
 
@@ -874,71 +940,67 @@ def _fan_author(msg: dict) -> str:
     return name
 
 
-def _format_fan_chat(page: int = 0) -> tuple[str, int, int]:
-    """Повертає (текст_сторінки, поточна_сторінка, всього_сторінок).
-
-    Сторінка 0 — найсвіжіші повідомлення. Більший номер сторінки —
-    глибше у минуле. Усередині сторінки — хронологічно (старі → нові).
-    """
-    items = load_fan_chat()
-    total = len(items)
-    if total == 0:
-        empty = (
-            "🕯️ *Біля вогнища тихо...*\n"
-            "Кинь першу іскру — натисни *✍️ Написати* і скажи щось зграї 🪵🔥"
-        )
-        return _brand(empty), 0, 1
-
-    pages = max(1, (total + FAN_CHAT_PAGE_SIZE - 1) // FAN_CHAT_PAGE_SIZE)
-    page = max(0, min(page, pages - 1))
-    end = total - page * FAN_CHAT_PAGE_SIZE
-    start = max(0, end - FAN_CHAT_PAGE_SIZE)
-    chunk = items[start:end]
-
-    header = (
-        f"🕯️ *Біля вогнища* 🪵🔥\n"
-        f"_сторінка {page + 1} з {pages} · усього повідомлень: {total}_\n"
-    )
-    body = []
-    for m in chunk:
-        author = _md_escape(_fan_author(m))
-        text = _md_escape(m.get("text", ""))
-        body.append(f"🪵 *{author}*: {text}")
-
-    return _brand(header + "\n" + "\n".join(body)), page, pages
-
-
-def _fan_chat_keyboard(page: int = 0, pages: int = 1) -> InlineKeyboardMarkup:
-    rows = []
-    nav = []
-    # ⬅️ Старіші — це наступна сторінка (глибше у минуле)
-    if page < pages - 1:
-        nav.append(InlineKeyboardButton("⬅️ Старіші", callback_data=f"fc:page:{page + 1}"))
-    # ➡️ Новіші — попередня сторінка (ближче до сьогодні)
-    if page > 0:
-        nav.append(InlineKeyboardButton("➡️ Новіші", callback_data=f"fc:page:{page - 1}"))
-    if nav:
-        rows.append(nav)
-    rows.append([
-        InlineKeyboardButton("✍️ Написати", callback_data="fc:write"),
-        InlineKeyboardButton("🔄 Оновити", callback_data=f"fc:page:{page}"),
+def _fan_chat_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("✍️ Написати", callback_data="fc:write"),
+            InlineKeyboardButton("🔄 Оновити", callback_data="fc:refresh"),
+        ],
+        [BACK_BUTTON, CLOSE_BUTTON],
     ])
-    if pages > 1 and page != 0:
-        rows.append([InlineKeyboardButton("⏮ До найсвіжіших", callback_data="fc:page:0")])
-    rows.append([InlineKeyboardButton("❌ Сховати", callback_data="close")])
-    return InlineKeyboardMarkup(rows)
 
 
 async def section_fanclub(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Відкриває фан-чат на сторінці зі свіжими повідомленнями."""
+    """Розкладає весь фан-чат окремими повідомленнями — щоб у Telegram
+    можна було природно гортати пальцем угору і бачити все."""
     context.user_data.pop("awaiting_fan_chat", None)
-    text, page, pages = _format_fan_chat(0)
-    await _send_section(
-        update, context,
-        text,
-        reply_markup=_fan_chat_keyboard(page, pages),
-        parse_mode=ParseMode.MARKDOWN,
+    chat = update.effective_chat
+    await _delete_user_msg(update)
+    await _cleanup_last_section(context, chat)
+
+    items = load_fan_chat()
+    total = len(items)
+
+    if total == 0:
+        empty = _brand(
+            "🕯️ *Біля вогнища тихо...*\n"
+            "Кинь першу іскру — натисни *✍️ Написати* і скажи щось зграї 🪵🔥"
+        )
+        sent = await chat.send_message(
+            empty,
+            reply_markup=_fan_chat_keyboard(),
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        context.user_data["last_section_msg_id"] = sent.message_id
+        return
+
+    # Шапка
+    header = _brand(
+        f"🕯️ *Біля вогнища* 🪵🔥\n"
+        f"_усього повідомлень: {total} · гортай вниз 👇_"
     )
+    head_msg = await chat.send_message(header, parse_mode=ParseMode.MARKDOWN)
+    fan_ids: list[int] = [head_msg.message_id]
+
+    # Тіло — хронологічно (старі → нові), розбите на блоки по ~3500 симв.
+    lines = []
+    for m in items:
+        author = _md_escape(_fan_author(m))
+        text = _md_escape(m.get("text", ""))
+        lines.append(f"🪵 *{author}*: {text}")
+
+    chunks = _chunk_lines(lines, max_chars=3500)
+    for i, chunk_text in enumerate(chunks):
+        is_last = (i == len(chunks) - 1)
+        kb = _fan_chat_keyboard() if is_last else None
+        msg = await chat.send_message(
+            chunk_text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN
+        )
+        fan_ids.append(msg.message_id)
+
+    context.user_data["fan_chat_msg_ids"] = fan_ids
+    # last_section_msg_id — щоб одиничне закриття теж зачепило фан-чат
+    context.user_data["last_section_msg_id"] = fan_ids[-1]
 
 
 async def section_feedback(
@@ -949,7 +1011,7 @@ async def section_feedback(
         update, context,
         "💬 Напиши свій відгук, запитання або враження від треку — "
         "наступним повідомленням. Ми читаємо все 🖤",
-        reply_markup=InlineKeyboardMarkup([[CLOSE_BUTTON]]),
+        reply_markup=InlineKeyboardMarkup([[BACK_BUTTON, CLOSE_BUTTON]]),
     )
 
 
@@ -965,7 +1027,7 @@ async def cmd_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await _send_section(
         update, context,
         "🔥 Дякуємо за відгук! Він уже у нашій кузні 🪓",
-        reply_markup=InlineKeyboardMarkup([[CLOSE_BUTTON]]),
+        reply_markup=InlineKeyboardMarkup([[BACK_BUTTON, CLOSE_BUTTON]]),
     )
 
 
@@ -982,6 +1044,11 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     # Універсальне закриття будь-якого розділу
     if data == "close":
         await _cleanup_last_section(context, query.message.chat)
+        return
+
+    # Назад — закрити поточний розділ і відкрити меню
+    if data == "back":
+        await _open_menu(update, context)
         return
 
     # --- Inline-меню ---
@@ -1038,7 +1105,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 InlineKeyboardButton("💬 Лишити відгук", callback_data=f"fb:{idx}"),
             ],
             [InlineKeyboardButton("⬅️ До треків", callback_data="tracks:list")],
-            [CLOSE_BUTTON],
+            [BACK_BUTTON, CLOSE_BUTTON],
         ]
         await _morph_section(
             query, context,
@@ -1055,7 +1122,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             for key, label in MOODS.items()
         ]
         buttons.append([InlineKeyboardButton("⬅️ До треків", callback_data="tracks:list")])
-        buttons.append([CLOSE_BUTTON])
+        buttons.append([BACK_BUTTON, CLOSE_BUTTON])
         await _morph_section(
             query, context,
             "🎧 *Обери настрій — складу персональний плейлист:*",
@@ -1099,7 +1166,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("🎧 Інший настрій", callback_data="mood:menu")],
             [InlineKeyboardButton("⬅️ До треків", callback_data="tracks:list")],
-            [CLOSE_BUTTON],
+            [BACK_BUTTON, CLOSE_BUTTON],
         ])
         await _morph_section(query, context, reply, reply_markup=kb)
         return
@@ -1119,24 +1186,15 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("🎬 Підписатись на YouTube",
                                   url=_youtube_subscribe_url())],
-            [CLOSE_BUTTON],
+            [BACK_BUTTON, CLOSE_BUTTON],
         ])
         await _morph_section(query, context, msg, reply_markup=kb)
         return
 
     # --- Фан-чат (біля вогнища) ---
     if data == "fc:refresh" or data.startswith("fc:page:"):
-        try:
-            page = int(data.split(":", 2)[2]) if data.startswith("fc:page:") else 0
-        except Exception:
-            page = 0
-        text, page, pages = _format_fan_chat(page)
-        await _morph_section(
-            query, context,
-            text,
-            reply_markup=_fan_chat_keyboard(page, pages),
-            parse_mode=ParseMode.MARKDOWN,
-        )
+        # Перевідкриваємо чат свіжим набором повідомлень
+        await section_fanclub(update, context)
         return
 
     if data == "fc:write":
@@ -1205,13 +1263,8 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             user.first_name if user else None,
             text,
         )
-        rendered, page, pages = _format_fan_chat(0)
-        await _send_section(
-            update, context,
-            rendered,
-            reply_markup=_fan_chat_keyboard(page, pages),
-            parse_mode=ParseMode.MARKDOWN,
-        )
+        await _forward_to_admin(context, update, "🕯️ Біля вогнища")
+        await section_fanclub(update, context)
         return
 
     if context.user_data.pop("awaiting_feedback", False):
@@ -1221,14 +1274,16 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         save_feedback(
             update.effective_chat.id, user.username if user else None, full
         )
+        await _forward_to_admin(context, update, "💬 Відгук")
         await _send_section(
             update, context,
             "🔥 Дякую! Твій голос почуто 🪓",
-            reply_markup=InlineKeyboardMarkup([[CLOSE_BUTTON]]),
+            reply_markup=InlineKeyboardMarkup([[BACK_BUTTON, CLOSE_BUTTON]]),
         )
         return
 
-    # AI-діалог
+    # AI-діалог (особисте повідомлення)
+    await _forward_to_admin(context, update, "💬 Особисте у бот")
     await update.message.chat.send_action(ChatAction.TYPING)
     history = get_history(context)
     try:
@@ -1244,6 +1299,26 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 # ---------------------------------------------------------------------------
 # Глобальний error handler
 # ---------------------------------------------------------------------------
+
+
+async def cmd_whoami(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Показує користувачу його Telegram ID — щоб налаштувати ADMIN_CHAT_ID."""
+    user = update.effective_user
+    is_admin = ADMIN_CHAT_ID is not None and user and user.id == ADMIN_CHAT_ID
+    admin_set = "✅ задано" if ADMIN_CHAT_ID else "❌ не задано"
+    body = (
+        f"🆔 Твій Telegram ID: `{user.id if user else '?'}`\n"
+        f"👤 {_md_escape(user.full_name) if user else ''}\n"
+        f"🔧 Адмін бота: {'✅ це ти' if is_admin else '— інший'}\n"
+        f"⚙️ ADMIN_CHAT_ID у середовищі: {admin_set}\n\n"
+        f"_Щоб отримувати усі повідомлення від людей — додай у Replit Secrets_\n"
+        f"_і у Render → Environment змінну:_\n"
+        f"`ADMIN_CHAT_ID={user.id if user else 'TWOJ_ID'}`\n"
+        f"_та перезапусти бота._"
+    )
+    await update.message.reply_text(
+        body, parse_mode=ParseMode.MARKDOWN, reply_markup=MAIN_KEYBOARD
+    )
 
 
 async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1287,6 +1362,7 @@ def build_app() -> Application:
 
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("help", cmd_help))
+    app.add_handler(CommandHandler("whoami", cmd_whoami))
     app.add_handler(CommandHandler("about", section_about))
     app.add_handler(CommandHandler("tracks", section_tracks))
     app.add_handler(CommandHandler("subscribe", section_subscribe))
