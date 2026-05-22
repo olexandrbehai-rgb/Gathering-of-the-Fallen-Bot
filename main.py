@@ -949,7 +949,13 @@ async def main() -> None:
         allowed_updates=Update.ALL_TYPES,
         drop_pending_updates=True,
     )
-    await app.updater.idle()
+    stop_event = asyncio.Event()
+    try:
+        await stop_event.wait()
+    finally:
+        await app.updater.stop()
+        await app.stop()
+        await app.shutdown()
 
 
 if __name__ == "__main__":
