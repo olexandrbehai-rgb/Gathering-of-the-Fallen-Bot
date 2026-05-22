@@ -940,6 +940,7 @@ def build_app() -> Application:
 
 
 def main() -> None:
+    asyncio.set_event_loop(asyncio.new_event_loop())
     start_keep_alive()
     app = build_app()
     log.info("🔥 Bot is starting (model=%s)...", OPENAI_MODEL)
