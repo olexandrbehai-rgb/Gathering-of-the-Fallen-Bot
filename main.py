@@ -1201,11 +1201,40 @@ async def main() -> None:
         await app.shutdown()
 
 
+def _run_forever() -> None:
+    """Запускає бот і автоматично перезапускає його після будь-якого падіння.
+
+    - KeyboardInterrupt / SystemExit — чистий вихід (Ctrl+C, SIGTERM від Render).
+    - telegram.error.Conflict — інший інстанс ще полить; чекаємо довше (60с).
+    - Будь-яка інша помилка — експоненційний backoff (5с → 10с → ... до 5хв).
+    """
+    import time
+    from telegram.error import Conflict, NetworkError, TimedOut
+
+    backoff = 5
+    while True:
+        try:
+            asyncio.run(main())
+            log.info("👋 main() завершився штатно — виходимо.")
+            return
+        except (KeyboardInterrupt, SystemExit):
+            log.info("👋 Bot stopped (SIGTERM/Ctrl+C).")
+            return
+        except Conflict as e:
+            log.warning("⚠️ Telegram Conflict (другий інстанс ще активний): %s. "
+                        "Чекаю 60с і пробую знову...", e)
+            time.sleep(60)
+            backoff = 5
+        except (NetworkError, TimedOut) as e:
+            log.warning("🌐 Мережева помилка: %s. Перезапуск через %ss...",
+                        e, backoff)
+            time.sleep(backoff)
+            backoff = min(backoff * 2, 300)
+        except Exception as e:
+            log.exception("💀 Crash: %s — перезапуск через %ss", e, backoff)
+            time.sleep(backoff)
+            backoff = min(backoff * 2, 300)
+
+
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except (KeyboardInterrupt, SystemExit):
-        log.info("👋 Bot stopped.")
-    except Exception as e:
-        log.exception("💀 Fatal: %s", e)
-        raise
+    _run_forever()
