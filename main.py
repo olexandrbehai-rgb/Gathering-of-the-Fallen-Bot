@@ -321,6 +321,7 @@ def track_url(track_title: str, platform: str) -> str:
 # Меню
 # ---------------------------------------------------------------------------
 
+BTN_MENU      = "☰ Меню"
 BTN_TRACKS    = "🎵 Треки"
 BTN_RELEASES  = "🔥 Релізи"
 BTN_LIVE      = "📺 Live"
@@ -332,15 +333,13 @@ BTN_DONATE    = "🪙 Донат"
 
 DONATE_URL = "https://paypal.me/Sasha89Alex"
 
+# Постійна клавіатура — лише ОДНА компактна кнопка-перемикач меню.
+# Тап → відкриває inline-меню; ще тап → ховає.
 MAIN_KEYBOARD = ReplyKeyboardMarkup(
-    [
-        [KeyboardButton(BTN_TRACKS), KeyboardButton(BTN_RELEASES), KeyboardButton(BTN_LIVE)],
-        [KeyboardButton(BTN_ABOUT), KeyboardButton(BTN_FANCLUB), KeyboardButton(BTN_SUBSCRIBE)],
-        [KeyboardButton(BTN_FEEDBACK), KeyboardButton(BTN_DONATE)],
-    ],
+    [[KeyboardButton(BTN_MENU)]],
     resize_keyboard=True,
     is_persistent=True,
-    input_field_placeholder="⛧ Напиши або тицяй кнопку...",
+    input_field_placeholder="⛧ Напиши або тицяй ☰ Меню",
 )
 
 # ---------------------------------------------------------------------------
@@ -563,6 +562,57 @@ async def _cleanup_last_section(context: ContextTypes.DEFAULT_TYPE, chat) -> Non
         await chat.delete_message(msg_id)
     except Exception:
         pass
+
+
+async def _close_menu(context: ContextTypes.DEFAULT_TYPE, chat) -> None:
+    """Видаляє inline-меню (якщо воно зараз відкрите)."""
+    msg_id = context.user_data.pop("last_menu_msg_id", None)
+    if msg_id is None:
+        return
+    try:
+        await chat.delete_message(msg_id)
+    except Exception:
+        pass
+
+
+def _menu_markup() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton(BTN_TRACKS,    callback_data="menu:tracks"),
+            InlineKeyboardButton(BTN_RELEASES,  callback_data="menu:releases"),
+        ],
+        [
+            InlineKeyboardButton(BTN_LIVE,      callback_data="menu:live"),
+            InlineKeyboardButton(BTN_ABOUT,     callback_data="menu:about"),
+        ],
+        [
+            InlineKeyboardButton(BTN_FANCLUB,   callback_data="menu:fanclub"),
+            InlineKeyboardButton(BTN_SUBSCRIBE, callback_data="menu:subscribe"),
+        ],
+        [
+            InlineKeyboardButton(BTN_FEEDBACK,  callback_data="menu:feedback"),
+            InlineKeyboardButton(BTN_DONATE,    callback_data="menu:donate"),
+        ],
+        [InlineKeyboardButton("❌ Сховати меню", callback_data="menu:hide")],
+    ])
+
+
+async def _open_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Відкриває inline-меню. Якщо вже відкрите — ховає (toggle)."""
+    chat = update.effective_chat
+    await _delete_user_msg(update)  # ховаємо тап "☰ Меню" користувача
+    # Toggle: якщо меню вже відкрите — просто закриваємо
+    if context.user_data.get("last_menu_msg_id"):
+        await _close_menu(context, chat)
+        return
+    # Прибираємо попередній розділ, щоб екран був чистий
+    await _cleanup_last_section(context, chat)
+    sent = await chat.send_message(
+        f"{BRAND_DIVIDER}\n*Меню* 🖤\nОбирай розділ ⬇️\n\n_{BRAND_SIGN}_",
+        reply_markup=_menu_markup(),
+        parse_mode=ParseMode.MARKDOWN,
+    )
+    context.user_data["last_menu_msg_id"] = sent.message_id
 
 
 async def _send_section(update: Update,
@@ -902,6 +952,30 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await _cleanup_last_section(context, query.message.chat)
         return
 
+    # --- Inline-меню ---
+    if data == "menu:hide":
+        await _close_menu(context, query.message.chat)
+        return
+
+    if data.startswith("menu:"):
+        key = data.split(":", 1)[1]
+        section_map = {
+            "tracks":    section_tracks,
+            "releases":  section_releases,
+            "live":      section_live,
+            "about":     section_about,
+            "fanclub":   section_fanclub,
+            "subscribe": section_subscribe,
+            "feedback":  section_feedback,
+            "donate":    section_donate,
+        }
+        handler = section_map.get(key)
+        if handler:
+            # ховаємо саме меню, потім відкриваємо обраний розділ
+            await _close_menu(context, query.message.chat)
+            await handler(update, context)
+        return
+
     # Повернення до списку треків
     if data == "tracks:list":
         await _morph_section(
@@ -1062,6 +1136,14 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not text:
         return
 
+    # Перемикач меню (єдина постійна кнопка внизу)
+    if text == BTN_MENU:
+        context.user_data.pop("awaiting_fan_chat", None)
+        context.user_data.pop("awaiting_feedback", None)
+        await _open_menu(update, context)
+        return
+
+    # Розділи можна викликати і текстом (старі лейбли, /команди тощо)
     routes = {
         BTN_TRACKS: section_tracks,
         BTN_RELEASES: section_releases,
@@ -1073,7 +1155,6 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         BTN_DONATE: section_donate,
     }
     if text in routes:
-        # натиснули будь-яку кнопку меню — скасовуємо режим "пишу у фан-чат"
         context.user_data.pop("awaiting_fan_chat", None)
         await routes[text](update, context)
         return
