@@ -643,8 +643,12 @@ async def _close_menu(context: ContextTypes.DEFAULT_TYPE, chat) -> None:
         pass
 
 
+BAND_SITE_URL = "https://gathering-of-the-fallen.replit.app/"
+
+
 def _menu_markup() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🌐 Сайт гурту", url=BAND_SITE_URL)],
         [
             InlineKeyboardButton(BTN_TRACKS,    callback_data="menu:tracks"),
             InlineKeyboardButton(BTN_RELEASES,  callback_data="menu:releases"),
