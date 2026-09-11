@@ -16,6 +16,14 @@ services:
         sync: false
       - key: OPENAI_MODEL
         value: gpt-4o-mini
+      - key: OPENAI_TRANSCRIBE_MODEL
+        value: gpt-4o-mini-transcribe
+      - key: ADMIN_CHAT_ID
+        sync: false
+      - key: BAND_SITE_URL
+        value: https://gathering-of-the-fallen.replit.app/
+      - key: AI_COOLDOWN_SECONDS
+        value: "4"
     disk:
       name: bot-data
       mountPath: /opt/render/project/src/data

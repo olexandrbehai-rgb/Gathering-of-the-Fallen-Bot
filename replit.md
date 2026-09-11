@@ -5,34 +5,37 @@ Telegram-бот українського онлайн-метал гурту "Gat
 
 ## Run & Operate
 
-- Workflow `Telegram Bot` — запускає `python3 main.py` (працює 24/7, polling)
-- Required secrets: `TELEGRAM_TOKEN`, `OPENAI_API_KEY`
-- Optional env: `OPENAI_MODEL` (за замовчуванням `gpt-4o-mini`)
+- Production: Render worker запускає `python main.py` (polling, один інстанс).
+- Required secrets: `TELEGRAM_TOKEN`, `OPENAI_API_KEY`, `ADMIN_CHAT_ID`.
+- Optional env: `OPENAI_MODEL`, `OPENAI_TRANSCRIBE_MODEL`, `BAND_SITE_URL`,
+  `AI_COOLDOWN_SECONDS`, `MAX_MESSAGE_CHARS`, `MAX_FAN_MESSAGE_CHARS`.
 
 ## Stack
 
 - Python 3.11
 - `python-telegram-bot` 21.x (async, polling)
-- `openai` SDK (Chat Completions)
-- JSON-сховище: `data/subscriptions.json`, `data/feedback.json`
+- `openai` SDK (Chat Completions + function tools + transcription)
+- SQLite: `data/gathering.sqlite3`; старі JSON-файли мігруються автоматично.
 
 ## Where things live
 
-- `main.py` — увесь бот (handlers, OpenAI, сховище, keep-alive)
-- `data/` — підписки та відгуки (створюється автоматично)
+- `main.py` — handlers, AI tools, адмін-команди, розсилки та сховище.
+- `data/` — SQLite-база на persistent disk Render.
 
 ## Architecture decisions
 
-- Один файл `main.py` — за специфікацією користувача.
-- Polling замість webhooks — простіше і стабільніше у Replit-середовищі.
-- Keep-alive — окремий daemon-thread з heartbeat у лог кожні 5 хв.
-- Історія діалогу зберігається у `context.user_data` (останні 16 повідомлень).
+- Один Python-процес polling; горизонтальне масштабування вимкнене, щоб не було
+  Telegram `Conflict`.
+- AI використовує перевірені інструменти для треків, посилань, релізів і підписки.
+- Історія AI, фан-чат, підписки, релізи та відгуки зберігаються в SQLite.
+- Старі JSON-дані імпортуються без втрат при першому старті.
 
 ## Product
 
-Команди: `/start`, `/help`, `/about`, `/tracks`, `/subscribe`, `/unsubscribe`, `/feedback`.
-Постійне нижнє меню: 🎵 Треки / 🔥 Релізи / 📺 Live / 🖤 Про гурт / 🔔 Підписка / 💬 Відгуки.
-Будь-яке інше повідомлення → AI-відповідь у фірмовому темному метал-стилі.
+Користувачі: `/start`, `/help`, `/about`, `/tracks`, `/search`, `/subscribe`,
+`/unsubscribe`, `/feedback`, `/fanclub`, `/resetai`, `/privacy`.
+Адмін: `/admin`, `/stats`, `/broadcast`, `/release`, `/hidepost`.
+Текст або голосове повідомлення → AI-відповідь у фірмовому темному метал-стилі.
 
 ## User preferences
 
@@ -41,5 +44,6 @@ Telegram-бот українського онлайн-метал гурту "Gat
 
 ## Gotchas
 
-- Після зміни секретів — обов'язково перезапустити workflow `Telegram Bot`.
+- Після зміни змінних у Render — перезапустити production worker.
 - У Telegram має бути активним тільки один інстанс бота, інакше polling видасть `Conflict`.
+- `data/` має бути змонтована як persistent disk у Render.
