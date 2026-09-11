@@ -17,6 +17,9 @@ import asyncio
 import json
 import logging
 import os
+import re
+import sqlite3
+import tempfile
 import threading
 import urllib.parse
 from datetime import datetime
@@ -63,6 +66,12 @@ except ValueError:
     ADMIN_CHAT_ID = None
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
+BAND_SITE_URL = os.environ.get(
+    "BAND_SITE_URL", "https://gathering-of-the-fallen.replit.app/"
+)
+AI_COOLDOWN_SECONDS = float(os.environ.get("AI_COOLDOWN_SECONDS", "4"))
+MAX_MESSAGE_CHARS = int(os.environ.get("MAX_MESSAGE_CHARS", "1800"))
+MAX_FAN_MESSAGE_CHARS = int(os.environ.get("MAX_FAN_MESSAGE_CHARS", "600"))
 
 if not TELEGRAM_TOKEN:
     raise RuntimeError("Не задано TELEGRAM_TOKEN у Secrets.")
@@ -71,11 +80,12 @@ if not OPENAI_API_KEY:
 
 DATA_DIR = Path(__file__).parent / "data"
 DATA_DIR.mkdir(exist_ok=True)
+DB_FILE = DATA_DIR / "gathering.sqlite3"
 SUBS_FILE = DATA_DIR / "subscriptions.json"
 FEEDBACK_FILE = DATA_DIR / "feedback.json"
 FAN_CHAT_FILE = DATA_DIR / "fan_chat.json"
 
-openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY, timeout=45.0, max_retries=2)
 
 # ===========================================================================
 # 🔧 CONFIG — впиши сюди РЕАЛЬНІ посилання гурту
