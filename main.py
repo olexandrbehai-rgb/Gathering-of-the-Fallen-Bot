@@ -508,24 +508,29 @@ def track_url(track_title: str, platform: str) -> str:
 # Меню
 # ---------------------------------------------------------------------------
 
-BTN_MENU      = "☰ Меню"
-BTN_TRACKS    = "🎵 Треки"
+BTN_APP       = "🖤 Мій простір"
+BTN_MENU      = "☰ Усе меню"
+BTN_TRACKS    = "🎵 Слухати треки"
 BTN_RELEASES  = "🔥 Релізи"
-BTN_LIVE      = "📺 Кліпи"
-BTN_ABOUT     = "🖤 Гурт"
-BTN_FANCLUB   = "🕯️ Біля вогнища"
+BTN_LIVE      = "📺 Дивитися кліпи"
+BTN_ABOUT     = "🖤 Про гурт"
+BTN_FANCLUB   = "🕯️ Фан-простір"
 BTN_SUBSCRIBE = "🔔 Підписка"
 BTN_FEEDBACK  = "💬 Відгук"
 BTN_DONATE    = "🪙 Донат"
 
 DONATE_URL = "https://paypal.me/Sasha89Alex"
 
-# Постійна клавіатура — 2 кнопки: меню + швидкий доступ до фан-чату.
+# Стартова клавіатура: Mini App і найважливіші дії видно одразу.
 MAIN_KEYBOARD = ReplyKeyboardMarkup(
-    [[KeyboardButton(BTN_MENU), KeyboardButton(BTN_FANCLUB)]],
+    [
+        [KeyboardButton(BTN_APP, web_app=WebAppInfo(url=BAND_SITE_URL))],
+        [KeyboardButton(BTN_TRACKS), KeyboardButton(BTN_LIVE)],
+        [KeyboardButton(BTN_MENU), KeyboardButton(BTN_FANCLUB)],
+    ],
     resize_keyboard=True,
     is_persistent=True,
-    input_field_placeholder="⛧ Напиши або тицяй кнопку",
+    input_field_placeholder="⛧ Обери дію або напиши мені",
 )
 
 # ---------------------------------------------------------------------------
@@ -1858,7 +1863,7 @@ def _menu_markup(chat_id: int | None = None) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [
             InlineKeyboardButton(
-                "⛧ Відкрити Mini App",
+                BTN_APP,
                 web_app=WebAppInfo(url=BAND_SITE_URL),
             )
         ],
@@ -2036,6 +2041,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "українського онлайн-метал гурту з Монреаля 🇨🇦🇺🇦\n\n"
         "Мелодійний death / atmospheric / folk-metal\n"
         "про еміграцію, пам'ять і силу духу 🔥🪓\n\n"
+        "Натисни *🖤 Мій простір*, щоб відкрити музику, кліпи, AI та фан-зону в одному місці.\n\n"
         f"_{BRAND_SIGN}_"
     )
     await _send_section(

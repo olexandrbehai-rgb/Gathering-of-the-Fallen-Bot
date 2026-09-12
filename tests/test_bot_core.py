@@ -259,6 +259,12 @@ class BotCoreTests(unittest.TestCase):
         self.assertIn("Почув: Розкажи про гурт", sent_text)
         self.assertIn("Наш гурт поєднує", sent_text)
 
+    def test_start_keyboard_shows_mini_app_as_first_action(self) -> None:
+        first_button = main.MAIN_KEYBOARD.keyboard[0][0]
+        self.assertEqual(first_button.text, main.BTN_APP)
+        self.assertIsNotNone(first_button.web_app)
+        self.assertEqual(first_button.web_app.url, main.BAND_SITE_URL)
+
     def test_voice_usage_warning_is_claimed_only_once_per_day(self) -> None:
         original_limit = main.VOICE_REPLY_DAILY_LIMIT
         original_percent = main.VOICE_USAGE_WARNING_PERCENT
