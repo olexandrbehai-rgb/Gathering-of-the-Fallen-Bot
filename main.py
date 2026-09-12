@@ -17,6 +17,7 @@ Secrets:
 import asyncio
 import json
 import logging
+import math
 import os
 import re
 import sqlite3
@@ -78,6 +79,9 @@ MAX_MESSAGE_CHARS = int(os.environ.get("MAX_MESSAGE_CHARS", "1800"))
 MAX_FAN_MESSAGE_CHARS = int(os.environ.get("MAX_FAN_MESSAGE_CHARS", "600"))
 VOICE_REPLY_MAX_CHARS = int(os.environ.get("VOICE_REPLY_MAX_CHARS", "700"))
 VOICE_REPLY_DAILY_LIMIT = int(os.environ.get("VOICE_REPLY_DAILY_LIMIT", "10"))
+VOICE_USAGE_WARNING_PERCENT = max(
+    1, min(100, int(os.environ.get("VOICE_USAGE_WARNING_PERCENT", "80")))
+)
 OPENAI_TTS_MODEL = os.environ.get("OPENAI_TTS_MODEL", "gpt-4o-mini-tts")
 OPENAI_TTS_VOICE = os.environ.get("OPENAI_TTS_VOICE", "onyx")
 
@@ -3146,6 +3150,68 @@ def _release_voice_reply(chat_id: int) -> None:
         )
         conn.commit()
 
+def _claim_voice_usage_warning() -> dict[str, int] | None:
+    """Атомарно резервує єдине денне попередження після досягнення порога."""
+    usage_date = datetime.now().astimezone().date().isoformat()
+    warning_key = f"voice_usage_warning:{usage_date}"
+    threshold = max(
+        1,
+        math.ceil(VOICE_REPLY_DAILY_LIMIT * VOICE_USAGE_WARNING_PERCENT / 100),
+    )
+    with _lock, _db() as conn:
+        today_count = conn.execute(
+            "SELECT COALESCE(SUM(reply_count), 0) AS total "
+            "FROM voice_usage WHERE usage_date=?",
+            (usage_date,),
+        ).fetchone()["total"]
+        if today_count < threshold:
+            return None
+        claimed = conn.execute(
+            "INSERT OR IGNORE INTO metadata(key, value) VALUES (?, ?)",
+            (warning_key, str(today_count)),
+        ).rowcount
+        conn.commit()
+    if not claimed:
+        return None
+    return {
+        "today": int(today_count),
+        "limit": VOICE_REPLY_DAILY_LIMIT,
+        "percent": VOICE_USAGE_WARNING_PERCENT,
+    }
+
+
+def _release_voice_usage_warning() -> None:
+    """Дозволяє повторити сповіщення, якщо Telegram його не доставив."""
+    usage_date = datetime.now().astimezone().date().isoformat()
+    with _lock, _db() as conn:
+        conn.execute(
+            "DELETE FROM metadata WHERE key=?",
+            (f"voice_usage_warning:{usage_date}",),
+        )
+        conn.commit()
+
+
+async def _notify_voice_usage_warning(message) -> None:
+    if not ADMIN_CHAT_ID:
+        return
+    usage = _claim_voice_usage_warning()
+    if not usage:
+        return
+    try:
+        await message.get_bot().send_message(
+            chat_id=ADMIN_CHAT_ID,
+            text=(
+                "⚠️ Голосові відповіді наближаються до денного ліміту.\n"
+                f"Сьогодні використано: {usage['today']}\n"
+                f"Денний ліміт: {usage['limit']}\n"
+                f"Поріг попередження: {usage['percent']}%"
+            ),
+        )
+    except Exception as e:
+        _release_voice_usage_warning()
+        log.warning("Voice usage warning failed: %s", e)
+
+
 async def _send_voice_reply(message, chat_id: int, text: str) -> str:
     """Надсилає AI TTS як Telegram voice; повертає статус для логування/UX."""
     if not voice_replies_enabled(chat_id):
@@ -3154,6 +3220,7 @@ async def _send_voice_reply(message, chat_id: int, text: str) -> str:
         return "limit"
     spoken_text = _shorten_for_voice(text)
     if not spoken_text:
+        _release_voice_reply(chat_id)
         return "empty"
 
     path = ""
@@ -3174,6 +3241,7 @@ async def _send_voice_reply(message, chat_id: int, text: str) -> str:
                 caption="🎙️ AI-відповідь",
                 reply_markup=MAIN_KEYBOARD,
             )
+        await _notify_voice_usage_warning(message)
         return "sent"
     except Exception as e:
         _release_voice_reply(chat_id)

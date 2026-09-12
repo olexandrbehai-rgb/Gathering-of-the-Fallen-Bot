@@ -183,6 +183,55 @@ class BotCoreTests(unittest.TestCase):
         finally:
             main.VOICE_REPLY_DAILY_LIMIT = original
 
+    def test_voice_usage_warning_is_claimed_only_once_per_day(self) -> None:
+        original_limit = main.VOICE_REPLY_DAILY_LIMIT
+        original_percent = main.VOICE_USAGE_WARNING_PERCENT
+        try:
+            main.VOICE_REPLY_DAILY_LIMIT = 10
+            main.VOICE_USAGE_WARNING_PERCENT = 80
+            with main._db() as conn:
+                conn.executemany(
+                    """INSERT INTO voice_usage(chat_id, usage_date, reply_count)
+                       VALUES (?, ?, ?)""",
+                    [
+                        (101, datetime.now().astimezone().date().isoformat(), 4),
+                        (202, datetime.now().astimezone().date().isoformat(), 4),
+                    ],
+                )
+                conn.commit()
+
+            self.assertEqual(
+                main._claim_voice_usage_warning(),
+                {"today": 8, "limit": 10, "percent": 80},
+            )
+            self.assertIsNone(main._claim_voice_usage_warning())
+        finally:
+            main.VOICE_REPLY_DAILY_LIMIT = original_limit
+            main.VOICE_USAGE_WARNING_PERCENT = original_percent
+
+    def test_voice_usage_warning_contains_only_aggregate_numbers(self) -> None:
+        original_admin = main.ADMIN_CHAT_ID
+        original_limit = main.VOICE_REPLY_DAILY_LIMIT
+        original_percent = main.VOICE_USAGE_WARNING_PERCENT
+        try:
+            main.ADMIN_CHAT_ID = 999
+            main.VOICE_REPLY_DAILY_LIMIT = 2
+            main.VOICE_USAGE_WARNING_PERCENT = 50
+            self.assertTrue(main._reserve_voice_reply(101))
+            bot = SimpleNamespace(send_message=AsyncMock())
+            message = SimpleNamespace(get_bot=lambda: bot)
+
+            asyncio.run(main._notify_voice_usage_warning(message))
+
+            sent = bot.send_message.await_args.kwargs
+            self.assertEqual(sent["chat_id"], 999)
+            self.assertIn("Сьогодні використано: 1", sent["text"])
+            self.assertNotIn("101", sent["text"])
+        finally:
+            main.ADMIN_CHAT_ID = original_admin
+            main.VOICE_REPLY_DAILY_LIMIT = original_limit
+            main.VOICE_USAGE_WARNING_PERCENT = original_percent
+
     def test_voice_stats_aggregate_usage_without_message_texts(self) -> None:
         today = datetime.now().astimezone().date()
         main.set_voice_replies(101, True)
