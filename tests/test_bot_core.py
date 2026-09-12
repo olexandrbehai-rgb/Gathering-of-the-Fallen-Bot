@@ -261,8 +261,15 @@ class BotCoreTests(unittest.TestCase):
         self.assertIn("Почув: Розкажи про гурт", sent_text)
         self.assertIn("Наш гурт поєднує", sent_text)
 
-    def test_start_keyboard_shows_mini_app_as_first_action(self) -> None:
-        first_button = main.MAIN_KEYBOARD.keyboard[0][0]
+    def test_mini_app_uses_inline_button_that_receives_telegram_identity(self) -> None:
+        reply_labels = {
+            button.text
+            for row in main.MAIN_KEYBOARD.keyboard
+            for button in row
+        }
+        self.assertNotIn(main.BTN_APP, reply_labels)
+
+        first_button = main.APP_LAUNCH_KEYBOARD.inline_keyboard[0][0]
         self.assertEqual(first_button.text, main.BTN_APP)
         self.assertIsNotNone(first_button.web_app)
         self.assertEqual(first_button.web_app.url, main.BAND_SITE_URL)

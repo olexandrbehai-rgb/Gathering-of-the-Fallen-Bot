@@ -522,16 +522,21 @@ BTN_DONATE    = "🪙 Донат"
 
 DONATE_URL = "https://paypal.me/Sasha89Alex"
 
-# Стартова клавіатура: Mini App і найважливіші дії видно одразу.
+# Reply-клавіатура не повинна запускати Mini App: Telegram відкриває
+# KeyboardButton.web_app як SimpleWebView без даних користувача (initData).
 MAIN_KEYBOARD = ReplyKeyboardMarkup(
     [
-        [KeyboardButton(BTN_APP, web_app=WebAppInfo(url=BAND_SITE_URL))],
         [KeyboardButton(BTN_TRACKS), KeyboardButton(BTN_LIVE)],
         [KeyboardButton(BTN_MENU), KeyboardButton(BTN_FANCLUB)],
     ],
     resize_keyboard=True,
     is_persistent=True,
     input_field_placeholder="⛧ Обери дію або напиши мені",
+)
+
+# Inline web_app-кнопка відкриває повноцінний WebView із підписаним initData.
+APP_LAUNCH_KEYBOARD = InlineKeyboardMarkup(
+    [[InlineKeyboardButton(BTN_APP, web_app=WebAppInfo(url=BAND_SITE_URL))]]
 )
 
 # ---------------------------------------------------------------------------
@@ -2078,9 +2083,15 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
     await _send_section(
         update, context, caption,
-        reply_markup=MAIN_KEYBOARD,
+        reply_markup=APP_LAUNCH_KEYBOARD,
         parse_mode=ParseMode.MARKDOWN,
         photo=HERO_IMAGE,
+    )
+    await update.effective_chat.send_message(
+        "Основні дії — на клавіатурі нижче. "
+        "Mini App відкривай кнопкою *🖤 Мій простір* під привітанням.",
+        reply_markup=MAIN_KEYBOARD,
+        parse_mode=ParseMode.MARKDOWN,
     )
 
 
@@ -2626,6 +2637,17 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         context.user_data.pop("awaiting_fan_chat", None)
         context.user_data.pop("awaiting_feedback", None)
         await _open_menu(update, context)
+        return
+
+    # Старі reply-клавіатури могли надсилати цей текст. Відповідаємо
+    # правильною inline-кнопкою, яка передає Telegram initData.
+    if text == BTN_APP:
+        await _send_section(
+            update,
+            context,
+            "Натисни кнопку нижче — Telegram відкриє твій персональний простір.",
+            reply_markup=APP_LAUNCH_KEYBOARD,
+        )
         return
 
     # Розділи можна викликати і текстом (старі лейбли, /команди тощо)
