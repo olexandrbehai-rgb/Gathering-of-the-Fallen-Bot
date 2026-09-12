@@ -76,6 +76,28 @@ class BotCoreTests(unittest.TestCase):
         self.assertTrue(straight)
         self.assertEqual(straight, curved)
 
+    def test_official_youtube_catalog_is_current(self) -> None:
+        self.assertEqual(
+            main.BAND_LINKS["YouTube"],
+            "https://www.youtube.com/@gathering_of_the_fallen",
+        )
+        self.assertEqual(len(main.YOUTUBE_VIDEOS), 30)
+        self.assertEqual(main.YOUTUBE_VIDEOS[0]["video_id"], "eBgXAXDKgDk")
+        self.assertTrue(
+            main.track_url(
+                "Додому (за участі Olia Stefaniw)", "YouTube"
+            ).endswith("eBgXAXDKgDk")
+        )
+        self.assertEqual(
+            main.BAND_LINKS["YouTube Music"],
+            "https://music.youtube.com/@gathering_of_the_fallen",
+        )
+        self.assertTrue(
+            main.track_url(
+                "Додому (за участі Olia Stefaniw)", "YouTube Music"
+            ).endswith("eBgXAXDKgDk")
+        )
+
     def test_fan_chat_rejects_spam_shapes(self) -> None:
         self.assertIsNotNone(main._fan_message_problem("https://spam.example"))
         self.assertIsNotNone(main._fan_message_problem("а" * 20))

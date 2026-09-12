@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/"
+title = "Gathering Of The Fallen"
+description = "A premium Telegram Mini App for Gathering Of The Fallen with music discovery, releases, AI conversation, fan community, subscriptions, and a dark cinematic metal identity."
+version = "1.0.0"
+id = "artifacts/fallen-mini-app"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 22220
+
+[services.development]
+run = "pnpm --filter @workspace/fallen-mini-app run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/fallen-mini-app", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/fallen-mini-app/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "22220"
+BASE_PATH = "/"

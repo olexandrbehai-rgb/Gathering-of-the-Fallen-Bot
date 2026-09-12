@@ -35,6 +35,7 @@ from telegram import (
     KeyboardButton,
     ReplyKeyboardMarkup,
     Update,
+    WebAppInfo,
 )
 from telegram.constants import ChatAction, ParseMode
 from telegram.error import Forbidden
@@ -108,7 +109,8 @@ openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY, timeout=45.0, max_retries=2)
 BAND_NAME = "Gathering Of The Fallen"
 
 BAND_LINKS: dict[str, str | None] = {
-    "YouTube":     "https://www.youtube.com/@gathering-of-the-fallen",
+    "YouTube":     "https://www.youtube.com/@gathering_of_the_fallen",
+    "YouTube Music": "https://music.youtube.com/@gathering_of_the_fallen",
     "Spotify":     None,
     "Apple Music": None,
     "Bandcamp":    None,
@@ -187,6 +189,46 @@ TRACK_LINKS: dict[str, dict[str, str]] = {
     "Блукаючий козак":                 {"YouTube": _yt("ZNSGqJzCv08")},
     "Чорна Береза":                    {"YouTube": _yt("QUB5m6Me7tk")},
 }
+
+# Актуальний зріз офіційного каналу станом на вересень 2026 року.
+# Порядок відповідає сторінці /videos: найновіші кліпи першими.
+YOUTUBE_VIDEOS: list[dict[str, Any]] = [
+    {"title": "Додому (за участі Olia Stefaniw)", "video_id": "eBgXAXDKgDk", "duration": "3:56", "tags": ["nostalgia", "emigrant"]},
+    {"title": "Два Кольори", "video_id": "_C1h2jO0bRw", "duration": "3:53", "tags": ["nostalgia"]},
+    {"title": "ХУ ЕМ АЙ?", "video_id": "CBr2Y310uis", "duration": "3:34", "tags": ["strength"]},
+    {"title": "Свій Харон (за участі SOLOMIYA_UA)", "video_id": "h_fzp76UyU4", "duration": "5:43", "tags": ["nostalgia"]},
+    {"title": "Розкажи-но ти про себе", "video_id": "xvcfd7hEnN0", "duration": "5:10", "tags": ["nostalgia"]},
+    {"title": "Доки крутяться колеса", "video_id": "3LMjpBT2Ga0", "duration": "4:37", "tags": ["emigrant", "strength"]},
+    {"title": "Повільніше за ніч", "video_id": "T87SfKuDqWw", "duration": "5:25", "tags": ["nostalgia"]},
+    {"title": "Я ще Тут!!!", "video_id": "O3YQfGqRvmc", "duration": "4:28", "tags": ["strength", "fire"]},
+    {"title": "Ти прийшла, щоб торкнутися серця!", "video_id": "vhOB--QHPyY", "duration": "5:18", "tags": ["nostalgia"]},
+    {"title": "Дівчина у Чорній сукні", "video_id": "5OBgxk5ZZYM", "duration": "5:21", "tags": ["nostalgia"]},
+    {"title": "Скажи небу, що ми Були...", "video_id": "JCxLAUHZnKY", "duration": "5:41", "tags": ["nostalgia"]},
+    {"title": "Голосніше За Грім", "video_id": "-239_7s10oM", "duration": "6:01", "tags": ["strength", "fire"]},
+    {"title": "Горіла Земля", "video_id": "Pq311kM-pvA", "duration": "7:12", "tags": ["fire", "strength"]},
+    {"title": "Боги Грому", "video_id": "e8_fwfez7e0", "duration": "6:08", "tags": ["strength", "fire"]},
+    {"title": "Дикі Дзвони", "video_id": "zy3Uz86MLxo", "duration": "4:14", "tags": ["fire"]},
+    {"title": "Вогонь під Дощем", "video_id": "Orq96rW4n4c", "duration": "4:27", "tags": ["fire", "strength"]},
+    {"title": "Не Озирайся", "video_id": "aqOD3RmJsOY", "duration": "4:01", "tags": ["strength"]},
+    {"title": "Війна із самим Собою", "video_id": "lWez4Iu1ucE", "duration": "4:45", "tags": ["strength"]},
+    {"title": "Храм Очей", "video_id": "yk5XB8SqKE8", "duration": "3:55", "tags": ["nostalgia"]},
+    {"title": "Горіла Сосна (кавер)", "video_id": "UyypaV0yY8g", "duration": "3:04", "tags": ["nostalgia"]},
+    {"title": "Лист До Самого Себе", "video_id": "Sp43M8nz1RA", "duration": "3:11", "tags": ["nostalgia"]},
+    {"title": "Козак Крізь Віки", "video_id": "-8VTIAA8GLQ", "duration": "4:28", "tags": ["strength"]},
+    {"title": "Підіймай Вогонь", "video_id": "O-uzMQfY-KI", "duration": "4:02", "tags": ["fire", "strength"]},
+    {"title": "Чуже Лице", "video_id": "8CjKQohRQwQ", "duration": "4:07", "tags": ["strength"]},
+    {"title": "Нічний Снайпер", "video_id": "jnp7IErWCDs", "duration": "4:37", "tags": ["strength"]},
+    {"title": "Бас і Дим", "video_id": "NU1SSEoijIk", "duration": "4:12", "tags": ["fire"]},
+    {"title": "Блукаючий козак", "video_id": "q2fmSRDy8QU", "duration": "4:22", "tags": ["emigrant", "nostalgia"]},
+    {"title": "Псалми", "video_id": "sm4yVIlE0Oc", "duration": "4:39", "tags": ["nostalgia"]},
+    {"title": "Wings of the Eternal Night", "video_id": "2AkrCvzU4Ss", "duration": "4:40", "tags": ["nostalgia"]},
+    {"title": "Не втрачай", "video_id": "2Q2THoiQfLA", "duration": "3:54", "tags": ["fire", "strength"]},
+]
+for _video in YOUTUBE_VIDEOS:
+    TRACK_LINKS[_video["title"]] = {
+        "YouTube": _yt(_video["video_id"]),
+        "YouTube Music": f"https://music.youtube.com/watch?v={_video['video_id']}",
+    }
 
 # ---------------------------------------------------------------------------
 # System prompt
@@ -288,6 +330,17 @@ TRACKS: list[dict[str, Any]] = [
     {"title": "Різдвяна Рок Опера",             "tags": ["fire"]},
 ]
 
+_known_track_titles = {
+    t["title"].casefold().replace("’", "'").replace("ʼ", "'").replace("`", "'")
+    for t in TRACKS
+}
+TRACKS = [
+    {"title": video["title"], "tags": video["tags"]}
+    for video in YOUTUBE_VIDEOS
+    if video["title"].casefold().replace("’", "'").replace("ʼ", "'").replace("`", "'")
+    not in _known_track_titles
+] + TRACKS
+
 MOODS = {
     "nostalgia": "🕯️ Ностальгія / сум за домом",
     "strength":  "🪓 Сила / боротьба",
@@ -309,6 +362,8 @@ def search_url(platform: str, query: str) -> str:
     q = f'"{BAND_NAME}" {query}'
     if platform == "YouTube":
         return f"https://www.youtube.com/results?search_query={_q(q)}"
+    if platform == "YouTube Music":
+        return f"https://music.youtube.com/search?q={_q(q)}"
     if platform == "Spotify":
         return f"https://open.spotify.com/search/{_q(q)}"
     if platform == "Apple Music":
@@ -344,7 +399,7 @@ def track_url(track_title: str, platform: str) -> str:
 BTN_MENU      = "☰ Меню"
 BTN_TRACKS    = "🎵 Треки"
 BTN_RELEASES  = "🔥 Релізи"
-BTN_LIVE      = "📺 Live"
+BTN_LIVE      = "📺 Кліпи"
 BTN_ABOUT     = "🖤 Гурт"
 BTN_FANCLUB   = "🕯️ Біля вогнища"
 BTN_SUBSCRIBE = "🔔 Підписка"
@@ -1194,7 +1249,12 @@ async def _close_menu(context: ContextTypes.DEFAULT_TYPE, chat) -> None:
 
 def _menu_markup() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🌐 Сайт гурту", url=BAND_SITE_URL)],
+        [
+            InlineKeyboardButton(
+                "⛧ Відкрити Mini App",
+                web_app=WebAppInfo(url=BAND_SITE_URL),
+            )
+        ],
         [
             InlineKeyboardButton(BTN_TRACKS,    callback_data="menu:tracks"),
             InlineKeyboardButton(BTN_RELEASES,  callback_data="menu:releases"),
@@ -1317,6 +1377,45 @@ TRACKS_HEADER = _brand(
     "Обирай — дам посилання на стрімінги 🔥"
 )
 
+VIDEO_PAGE_SIZE = 6
+
+
+def _videos_markup(page: int = 0) -> InlineKeyboardMarkup:
+    pages = max(1, (len(YOUTUBE_VIDEOS) + VIDEO_PAGE_SIZE - 1) // VIDEO_PAGE_SIZE)
+    page = max(0, min(page, pages - 1))
+    start = page * VIDEO_PAGE_SIZE
+    rows = [
+        [
+            InlineKeyboardButton(
+                f"▶️ {video['title'][:38]} · {video['duration']}",
+                url=_yt(video["video_id"]),
+            )
+        ]
+        for video in YOUTUBE_VIDEOS[start : start + VIDEO_PAGE_SIZE]
+    ]
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton("⬅️", callback_data=f"videos:page:{page - 1}"))
+    nav.append(InlineKeyboardButton(f"{page + 1}/{pages}", callback_data="noop"))
+    if page < pages - 1:
+        nav.append(InlineKeyboardButton("➡️", callback_data=f"videos:page:{page + 1}"))
+    rows.append(nav)
+    rows.append(
+        [
+            InlineKeyboardButton("📺 Відкрити весь канал", url=band_url("YouTube")),
+            InlineKeyboardButton("🎧 YouTube Music", url=band_url("YouTube Music")),
+        ]
+    )
+    rows.append([BACK_BUTTON, CLOSE_BUTTON])
+    return InlineKeyboardMarkup(rows)
+
+
+CLIPS_HEADER = _brand(
+    "📺 *Офіційні кліпи та пісні*\n\n"
+    f"Актуальні відео з каналу *{BAND_NAME}* — {len(YOUTUBE_VIDEOS)} найновіших робіт.\n"
+    "Натисни назву, щоб одразу відкрити кліп у YouTube."
+)
+
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     touch_user(update)
@@ -1346,6 +1445,7 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/help — ця підказка\n"
         "/about — про гурт\n"
         "/tracks — треки та плейлисти\n"
+        "/clips — найновіші кліпи з YouTube\n"
         "/search <назва або настрій> — знайти трек\n"
         "/fanclub — 🤘 фан-чат (відкрити/закрити)\n"
         "/subscribe — підписка на новини\n"
@@ -1422,21 +1522,9 @@ async def section_releases(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 
 async def section_live(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    text = _brand(
-        "📺 *Онлайн-стріми та Live*\n\n"
-        "Ми — онлайн-гурт з Квебеку 🇨🇦, тож live відбуваються в мережі: "
-        "YouTube-стріми, listening-сесії, спільне прослуховування з фанами 🕯️\n\n"
-        "Дати наступних стрімів — у нашому YouTube. Підпишись 🔔, "
-        "щоб не пропустити анонс."
-    )
-    buttons = [
-        [InlineKeyboardButton("▶️ YouTube", url=band_url("YouTube"))],
-        [InlineKeyboardButton("🔔 Підписатися на анонси", callback_data="subscribe")],
-        [BACK_BUTTON, CLOSE_BUTTON],
-    ]
     await _send_section(
-        update, context, text,
-        reply_markup=InlineKeyboardMarkup(buttons),
+        update, context, CLIPS_HEADER,
+        reply_markup=_videos_markup(0),
         parse_mode=ParseMode.MARKDOWN,
     )
 
@@ -1465,7 +1553,7 @@ async def section_about(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 def _youtube_subscribe_url() -> str:
     """URL каналу з параметром, що автоматично відкриває діалог підписки."""
-    base = BAND_LINKS.get("YouTube") or "https://www.youtube.com/@gathering-of-the-fallen"
+    base = BAND_LINKS.get("YouTube") or "https://www.youtube.com/@gathering_of_the_fallen"
     sep = "&" if "?" in base else "?"
     return f"{base}{sep}sub_confirmation=1"
 
@@ -1732,6 +1820,20 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         )
         return
 
+    if data.startswith("videos:page:"):
+        try:
+            page = int(data.rsplit(":", 1)[1])
+        except ValueError:
+            return
+        await _morph_section(
+            query,
+            context,
+            CLIPS_HEADER,
+            reply_markup=_videos_markup(page),
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        return
+
     # Перегляд конкретного треку
     if data.startswith("track:"):
         idx = int(data.split(":", 1)[1])
@@ -1745,7 +1847,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         buttons = [
             [
                 InlineKeyboardButton("▶️ YouTube", url=track_url(title, "YouTube")),
-                InlineKeyboardButton("🎧 Spotify", url=track_url(title, "Spotify")),
+                InlineKeyboardButton("🎧 YouTube Music", url=track_url(title, "YouTube Music")),
             ],
             [
                 InlineKeyboardButton("🍎 Apple Music", url=track_url(title, "Apple Music")),
@@ -2279,6 +2381,7 @@ def build_app() -> Application:
     app.add_handler(CommandHandler("whoami", cmd_whoami))
     app.add_handler(CommandHandler("about", section_about))
     app.add_handler(CommandHandler("tracks", section_tracks))
+    app.add_handler(CommandHandler("clips", section_live))
     app.add_handler(CommandHandler("subscribe", section_subscribe))
     app.add_handler(CommandHandler("unsubscribe", cmd_unsubscribe))
     app.add_handler(CommandHandler("feedback", cmd_feedback))

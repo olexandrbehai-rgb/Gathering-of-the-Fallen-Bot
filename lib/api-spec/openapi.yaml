@@ -1,36 +1,284 @@
 openapi: 3.1.0
 info:
-  # Do not change the title, if the title changes, the import paths will be broken
   title: Api
-  version: 0.1.0
-  description: API specification
+  version: 1.0.0
+  description: Gathering Of The Fallen Telegram Mini App API
 servers:
   - url: /api
     description: Base API path
 tags:
-  - name: health
-    description: Health operations
+  - { name: health, description: Health operations }
+  - { name: experience, description: Fan experience }
+  - { name: community, description: Fan community }
+  - { name: ai, description: AI oracle }
+  - { name: auth, description: Telegram authentication }
 paths:
   /healthz:
     get:
       operationId: healthCheck
       tags: [health]
-      summary: Health check
-      description: Returns server health status
       responses:
         "200":
           description: Healthy
           content:
             application/json:
+              schema: { $ref: "#/components/schemas/HealthStatus" }
+  /experience:
+    get:
+      operationId: getExperience
+      tags: [experience]
+      summary: Get the complete home experience
+      responses:
+        "200":
+          description: Experience
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Experience" }
+  /tracks:
+    get:
+      operationId: listTracks
+      tags: [experience]
+      parameters:
+        - { name: query, in: query, schema: { type: string } }
+        - { name: mood, in: query, schema: { type: string } }
+      responses:
+        "200":
+          description: Tracks
+          content:
+            application/json:
               schema:
-                $ref: "#/components/schemas/HealthStatus"
+                type: array
+                items: { $ref: "#/components/schemas/Track" }
+  /releases:
+    get:
+      operationId: listReleases
+      tags: [experience]
+      responses:
+        "200":
+          description: Releases
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Release" }
+  /videos:
+    get:
+      operationId: listVideos
+      tags: [experience]
+      summary: List the newest official YouTube clips
+      responses:
+        "200":
+          description: Videos
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Video" }
+  /fan-feed:
+    get:
+      operationId: listFanPosts
+      tags: [community]
+      responses:
+        "200":
+          description: Fan posts
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/FanPost" }
+    post:
+      operationId: createFanPost
+      tags: [community]
+      security: [{ sessionCookie: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/FanPostInput" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FanPost" }
+  /assistant:
+    post:
+      operationId: askAssistant
+      tags: [ai]
+      security: [{ sessionCookie: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AssistantInput" }
+      responses:
+        "200":
+          description: AI response
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AssistantReply" }
+  /subscription:
+    post:
+      operationId: updateSubscription
+      tags: [community]
+      security: [{ sessionCookie: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SubscriptionInput" }
+      responses:
+        "200":
+          description: Subscription state
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SubscriptionState" }
+  /auth/telegram:
+    post:
+      operationId: authenticateTelegram
+      tags: [auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TelegramAuthInput" }
+      responses:
+        "200":
+          description: Authenticated fan
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FanIdentity" }
+  /me:
+    get:
+      operationId: getMe
+      tags: [auth]
+      security: [{ sessionCookie: [] }]
+      responses:
+        "200":
+          description: Current fan
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FanIdentity" }
+  /usage/summary:
+    get:
+      operationId: getUsageSummary
+      tags: [ai]
+      security: [{ sessionCookie: [] }]
+      responses:
+        "200":
+          description: Admin AI usage summary
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UsageSummary" }
 components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: fallen_session
   schemas:
     HealthStatus:
       type: object
+      required: [status]
       properties:
-        status:
-          type: string
-      required:
-        - status
-
+        status: { type: string }
+    Track:
+      type: object
+      required: [id, title, moods, youtubeUrl, youtubeMusicUrl, spotifyUrl, appleMusicUrl]
+      properties:
+        id: { type: string }
+        title: { type: string }
+        moods: { type: array, items: { type: string } }
+        youtubeUrl: { type: string, format: uri }
+        youtubeMusicUrl: { type: string, format: uri }
+        spotifyUrl: { type: string, format: uri }
+        appleMusicUrl: { type: string, format: uri }
+    Release:
+      type: object
+      required: [id, title, description, date, url, accent]
+      properties:
+        id: { type: string }
+        title: { type: string }
+        description: { type: string }
+        date: { type: string }
+        url: { type: string, format: uri }
+        accent: { type: string }
+    Video:
+      type: object
+      required: [id, title, duration, youtubeUrl, youtubeMusicUrl, thumbnailUrl]
+      properties:
+        id: { type: string }
+        title: { type: string }
+        duration: { type: string }
+        youtubeUrl: { type: string, format: uri }
+        youtubeMusicUrl: { type: string, format: uri }
+        thumbnailUrl: { type: string, format: uri }
+    Experience:
+      type: object
+      required: [featured, recentReleases, moods, communityCount, trackCount]
+      properties:
+        featured: { $ref: "#/components/schemas/Track" }
+        recentReleases:
+          type: array
+          items: { $ref: "#/components/schemas/Release" }
+        moods: { type: array, items: { type: string } }
+        communityCount: { type: integer }
+        trackCount: { type: integer }
+    FanPost:
+      type: object
+      required: [id, author, message, createdAt]
+      properties:
+        id: { type: integer }
+        author: { type: string }
+        message: { type: string }
+        createdAt: { type: string, format: date-time }
+    FanPostInput:
+      type: object
+      required: [message]
+      properties:
+        message: { type: string, minLength: 2, maxLength: 700 }
+    AssistantInput:
+      type: object
+      required: [message]
+      properties:
+        message: { type: string, minLength: 1, maxLength: 1800 }
+    AssistantReply:
+      type: object
+      required: [reply, suggestions]
+      properties:
+        reply: { type: string }
+        suggestions: { type: array, items: { type: string } }
+    SubscriptionInput:
+      type: object
+      required: [subscribed]
+      properties:
+        subscribed: { type: boolean }
+    SubscriptionState:
+      type: object
+      required: [subscribed]
+      properties:
+        subscribed: { type: boolean }
+    TelegramAuthInput:
+      type: object
+      required: [initData]
+      properties:
+        initData: { type: string, minLength: 1, maxLength: 8192 }
+    FanIdentity:
+      type: object
+      required: [id, displayName, username, isAdmin, subscribed]
+      properties:
+        id: { type: string }
+        displayName: { type: string }
+        username: { type: string }
+        avatarUrl: { type: ["string", "null"] }
+        isAdmin: { type: boolean }
+        subscribed: { type: boolean }
+    UsageSummary:
+      type: object
+      required: [todayRequests, monthRequests, monthEstimatedUsd, voiceSeconds, errorRate]
+      properties:
+        todayRequests: { type: integer }
+        monthRequests: { type: integer }
+        monthEstimatedUsd: { type: number }
+        voiceSeconds: { type: number }
+        errorRate: { type: number }
