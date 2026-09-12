@@ -892,14 +892,14 @@ function OracleView({ onBack }: { onBack: () => void }) {
   };
 
   return (
-    <div className="flex flex-col h-full animate-in fade-in slide-in-from-bottom-8 duration-500 relative">
+    <div className="flex min-h-[100dvh] flex-col overflow-hidden animate-in fade-in slide-in-from-bottom-8 duration-500 relative">
       <ViewHeader title="Оракул" onBack={onBack} />
 
       {/* Background Effect */}
       <div className="absolute inset-0 top-16 bg-[radial-gradient(circle_at_top,_var(--tw-gradient-stops))] from-primary/5 via-background to-background pointer-events-none z-0"></div>
 
       <div
-        className="flex-1 overflow-y-auto p-5 space-y-8 relative z-10"
+        className="min-h-0 flex-1 overflow-y-auto p-5 pb-6 space-y-8 relative z-10"
         ref={scrollRef}
       >
         <div className="flex justify-center mb-8">
@@ -924,7 +924,7 @@ function OracleView({ onBack }: { onBack: () => void }) {
                 "p-4 text-[15px] leading-relaxed relative rounded-2xl",
                 msg.role === "user"
                   ? "bg-secondary border border-border/50 text-foreground rounded-tr-sm"
-                  : "bg-primary/10 border border-primary/20 text-primary-foreground font-serif tracking-wide rounded-tl-sm violet-glow",
+                  : "bg-primary/15 border border-primary/40 text-foreground font-serif tracking-wide rounded-tl-sm shadow-[0_0_24px_rgba(168,85,247,0.16)]",
               )}
             >
               {msg.text}
@@ -943,7 +943,7 @@ function OracleView({ onBack }: { onBack: () => void }) {
         )}
       </div>
 
-      <div className="p-4 bg-background/90 backdrop-blur-xl border-t border-border/40 relative z-20 pb-8">
+      <div className="sticky bottom-0 shrink-0 p-4 bg-background/95 backdrop-blur-xl border-t border-border/50 relative z-20 pb-8">
         <div className="flex gap-3 relative max-w-md mx-auto">
           <Input
             value={input}
