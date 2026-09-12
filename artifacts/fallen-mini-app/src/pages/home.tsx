@@ -10,7 +10,7 @@ import {
   useListVideos
 } from '@workspace/api-client-react';
 import { useAuth } from '@/lib/auth';
-import { Play, MessageSquare, Users, Loader2, Send, Flame, Skull, Music2, Bell, BellOff, ArrowRight, Film, Headphones } from 'lucide-react';
+import { Play, MessageSquare, Users, Loader2, Send, Flame, Skull, Music2, Bell, BellOff, ArrowRight, Film, Headphones, Search, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
@@ -132,8 +132,13 @@ function SubscriptionToggle() {
 }
 
 function SanctuaryTab() {
+  const [query, setQuery] = useState('');
+  const [mood, setMood] = useState('');
   const { data: exp, isLoading: isExpLoading } = useGetExperience();
-  const { data: tracks, isLoading: isTracksLoading } = useListTracks();
+  const { data: tracks, isLoading: isTracksLoading } = useListTracks({
+    query: query.trim() || undefined,
+    mood: mood || undefined,
+  });
   const { data: releases, isLoading: isReleasesLoading } = useListReleases();
   const { data: videos, isLoading: isVideosLoading } = useListVideos();
 
@@ -256,6 +261,36 @@ function SanctuaryTab() {
       {/* Archive */}
       <section>
         <SectionTitle icon={Skull}>Архіви</SectionTitle>
+        <div className="space-y-3 mb-5">
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+            <Input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Знайти трек..."
+              aria-label="Пошук треків"
+              className="h-11 pl-10 pr-10 bg-card border-border focus-visible:ring-primary"
+            />
+            {query && (
+              <button
+                type="button"
+                onClick={() => setQuery('')}
+                aria-label="Очистити пошук"
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-primary"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            )}
+          </div>
+          <div className="flex gap-2 overflow-x-auto pb-1 [&::-webkit-scrollbar]:hidden" style={{ scrollbarWidth: 'none' }}>
+            <MoodButton active={!mood} onClick={() => setMood('')}>Усі</MoodButton>
+            {exp?.moods.map((item) => (
+              <MoodButton key={item} active={mood === item} onClick={() => setMood(item)}>
+                {item}
+              </MoodButton>
+            ))}
+          </div>
+        </div>
         <div className="space-y-2">
           {tracks?.filter(t => t.id !== exp?.featured?.id).map(track => (
             <div key={track.id} className="flex items-center justify-between py-3 border-b border-border/30 hover:bg-secondary/20 px-2 transition-colors">
@@ -283,9 +318,31 @@ function SanctuaryTab() {
               </div>
             </div>
           ))}
+          {tracks?.filter(t => t.id !== exp?.featured?.id).length === 0 && (
+            <div className="py-8 text-center border border-dashed border-border text-sm text-muted-foreground font-serif">
+              У цих архівах нічого не знайдено.
+            </div>
+          )}
         </div>
       </section>
     </div>
+  );
+}
+
+function MoodButton({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        "shrink-0 border px-3 py-2 text-[10px] font-bold uppercase tracking-wider transition-colors",
+        active
+          ? "border-primary bg-primary/15 text-primary"
+          : "border-border bg-card text-muted-foreground hover:border-primary/50 hover:text-foreground",
+      )}
+    >
+      {children}
+    </button>
   );
 }
 

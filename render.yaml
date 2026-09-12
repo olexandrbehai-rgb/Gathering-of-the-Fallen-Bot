@@ -1,8 +1,38 @@
 services:
+  - type: web
+    name: gathering-of-the-fallen-mini-app
+    runtime: node
+    plan: starter
+    region: frankfurt
+    buildCommand: corepack enable && pnpm install --frozen-lockfile && BASE_PATH=/ pnpm --filter @workspace/fallen-mini-app build && pnpm --filter @workspace/api-server build
+    preDeployCommand: pnpm --filter @workspace/db push
+    startCommand: pnpm --filter @workspace/api-server start
+    healthCheckPath: /api/healthz
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: "22.14.0"
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: gathering-of-the-fallen-db
+          property: connectionString
+      - key: SESSION_SECRET
+        sync: false
+      - key: TELEGRAM_TOKEN
+        sync: false
+      - key: ADMIN_CHAT_ID
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_MODEL
+        value: gpt-4o-mini
+
   - type: worker
     name: gathering-of-the-fallen-bot
     runtime: python
-    plan: free
+    plan: starter
     region: frankfurt
     buildCommand: pip install -r requirements.txt
     startCommand: python main.py
@@ -25,7 +55,7 @@ services:
       - key: ADMIN_CHAT_ID
         sync: false
       - key: BAND_SITE_URL
-        value: https://gathering-of-the-fallen.replit.app/
+        sync: false
       - key: AI_COOLDOWN_SECONDS
         value: "4"
       - key: VOICE_REPLY_MAX_CHARS
@@ -36,3 +66,8 @@ services:
       name: bot-data
       mountPath: /opt/render/project/src/data
       sizeGB: 1
+
+databases:
+  - name: gathering-of-the-fallen-db
+    plan: basic-256mb
+    region: frankfurt
