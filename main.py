@@ -78,7 +78,7 @@ except ValueError:
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
 BAND_SITE_URL = os.environ.get(
-    "BAND_SITE_URL", "https://gathering-of-the-fallen.replit.app/"
+    "BAND_SITE_URL", "https://gathering-of-the-fallen-mini-app.onrender.com/"
 )
 AI_COOLDOWN_SECONDS = float(os.environ.get("AI_COOLDOWN_SECONDS", "4"))
 MAX_MESSAGE_CHARS = int(os.environ.get("MAX_MESSAGE_CHARS", "1800"))

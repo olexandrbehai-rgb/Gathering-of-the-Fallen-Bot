@@ -55,7 +55,7 @@ services:
       - key: ADMIN_CHAT_ID
         sync: false
       - key: BAND_SITE_URL
-        sync: false
+        value: https://gathering-of-the-fallen-mini-app.onrender.com/
       - key: AI_COOLDOWN_SECONDS
         value: "4"
       - key: VOICE_REPLY_MAX_CHARS
