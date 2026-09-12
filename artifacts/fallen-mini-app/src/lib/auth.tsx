@@ -6,6 +6,9 @@ import {
   type FanIdentity,
 } from '@workspace/api-client-react';
 
+const TELEGRAM_INIT_DATA_WAIT_MS = 4_000;
+const TELEGRAM_INIT_DATA_POLL_MS = 100;
+
 interface AuthContextType {
   identity: FanIdentity | null;
   isLoading: boolean;
@@ -59,10 +62,30 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return window.Telegram?.WebApp?.initData as string | undefined;
   };
 
-  const authenticateWithTelegram = () => {
-    const initData = getTelegramInitData();
+  const waitForTelegramInitData = async (): Promise<string | undefined> => {
+    const startedAt = Date.now();
+
+    while (Date.now() - startedAt < TELEGRAM_INIT_DATA_WAIT_MS) {
+      // @ts-ignore Telegram injects WebApp into window inside the Mini App.
+      const webApp = window.Telegram?.WebApp;
+      // Tell Telegram that the app has loaded before reading its signed data.
+      // @ts-ignore Telegram injects WebApp into window inside the Mini App.
+      webApp?.ready?.();
+
+      const initData = getTelegramInitData();
+      if (initData) return initData;
+
+      await new Promise((resolve) => window.setTimeout(resolve, TELEGRAM_INIT_DATA_POLL_MS));
+    }
+
+    return getTelegramInitData();
+  };
+
+  const authenticateWithTelegram = async () => {
+    const initData = await waitForTelegramInitData();
 
     if (!initData) {
+      console.warn('[Telegram Mini App] initData was not available after waiting for Telegram SDK');
       finishWithoutTelegram('missing-init-data');
       return;
     }
