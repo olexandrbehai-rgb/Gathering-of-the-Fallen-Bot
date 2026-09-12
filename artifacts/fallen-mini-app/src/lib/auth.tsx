@@ -9,11 +9,72 @@ import {
 const TELEGRAM_INIT_DATA_WAIT_MS = 4_000;
 const TELEGRAM_INIT_DATA_POLL_MS = 100;
 
+export type TelegramAuthError = 'missing-init-data' | 'rejected';
+
+export interface TelegramAuthErrorContent {
+  heading: string;
+  message: string;
+}
+
+export function getTelegramAuthErrorContent(
+  error: TelegramAuthError | null,
+): TelegramAuthErrorContent {
+  if (error === 'rejected') {
+    return {
+      heading: 'НЕ ВДАЛОСЯ УВІЙТИ',
+      message:
+        'Telegram не підтвердив ваші дані входу. Спробуйте ще раз. Якщо помилка повториться, закрийте Mini App і відкрийте його заново з бота.',
+    };
+  }
+
+  return {
+    heading: 'ВІДКРИЙТЕ У TELEGRAM',
+    message:
+      'Mini App не отримав дані входу від Telegram. Закрийте його, поверніться до бота й натисніть кнопку Mini App ще раз.',
+  };
+}
+
+export function invokeTelegramAuthRetry(
+  isPending: boolean,
+  authenticate: () => void,
+): void {
+  if (!isPending) authenticate();
+}
+
+export function resolveTelegramAuthFailure(
+  error: TelegramAuthError,
+  isDevelopment: boolean,
+): {
+  identity: FanIdentity | null;
+  isPreview: boolean;
+  authError: TelegramAuthError | null;
+} {
+  if (isDevelopment) {
+    return {
+      identity: {
+        id: 'preview-user',
+        displayName: 'Загублена Душа (Тест)',
+        username: 'preview_soul',
+        isAdmin: true,
+        subscribed: false,
+      },
+      isPreview: true,
+      authError: null,
+    };
+  }
+
+  return {
+    identity: null,
+    isPreview: false,
+    authError: error,
+  };
+}
+
 interface AuthContextType {
   identity: FanIdentity | null;
   isLoading: boolean;
   isPreview: boolean;
-  authError: 'missing-init-data' | 'rejected' | null;
+  authError: TelegramAuthError | null;
   retryTelegramAuth: () => void;
   refetchIdentity: () => void;
 }
@@ -102,31 +163,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
   };
 
-  const enablePreviewFallback = () => {
-    setIsPreview(true);
-    setIdentity({
-      id: 'preview-user',
-      displayName: 'Загублена Душа (Тест)',
-      username: 'preview_soul',
-      isAdmin: true,
-      subscribed: false
-    });
-    setIsInitializing(false);
-  };
-
-  const finishWithoutTelegram = (error: NonNullable<AuthContextType['authError']>) => {
-    if (import.meta.env.DEV) {
-      enablePreviewFallback();
-      return;
-    }
-    setIdentity(null);
-    setAuthError(error);
+  const finishWithoutTelegram = (error: TelegramAuthError) => {
+    const result = resolveTelegramAuthFailure(error, import.meta.env.DEV);
+    setIsPreview(result.isPreview);
+    setIdentity(result.identity);
+    setAuthError(result.authError);
     setIsInitializing(false);
   };
 
   const retryTelegramAuth = () => {
-    if (authMutation.isPending) return;
-    authenticateWithTelegram();
+    invokeTelegramAuthRetry(authMutation.isPending, authenticateWithTelegram);
   };
 
   const handleRefetch = () => {

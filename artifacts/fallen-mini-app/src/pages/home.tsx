@@ -10,7 +10,7 @@ import {
   useUpdateSubscription,
   useListVideos
 } from '@workspace/api-client-react';
-import { useAuth } from '@/lib/auth';
+import { getTelegramAuthErrorContent, useAuth } from '@/lib/auth';
 import { Play, MessageSquare, Users, Loader2, Send, Flame, Skull, Music2, Bell, BellOff, ArrowRight, Film, Headphones, Search, X, EyeOff, RefreshCw, LogOut } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -35,17 +35,16 @@ export default function Home() {
 
   if (!identity && !import.meta.env.DEV) {
     const initDataWasRejected = authError === 'rejected';
+    const authFailureContent = getTelegramAuthErrorContent(authError);
 
     return (
       <div className="flex-1 flex flex-col items-center justify-center px-8 text-center">
         <Skull className="w-12 h-12 text-primary mb-5" />
         <h1 className="font-serif text-2xl font-bold tracking-widest mb-3">
-          {initDataWasRejected ? 'НЕ ВДАЛОСЯ УВІЙТИ' : 'ВІДКРИЙТЕ У TELEGRAM'}
+          {authFailureContent.heading}
         </h1>
         <p className="text-sm text-muted-foreground leading-relaxed max-w-xs">
-          {initDataWasRejected
-            ? 'Telegram не підтвердив ваші дані входу. Спробуйте ще раз. Якщо помилка повториться, закрийте Mini App і відкрийте його заново з бота.'
-            : 'Mini App не отримав дані входу від Telegram. Закрийте його, поверніться до бота й натисніть кнопку Mini App ще раз.'}
+          {authFailureContent.message}
         </p>
         <div className="mt-6 flex w-full max-w-xs flex-col gap-3">
           {initDataWasRejected && (
