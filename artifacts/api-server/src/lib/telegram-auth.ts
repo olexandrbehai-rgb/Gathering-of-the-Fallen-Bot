@@ -52,7 +52,7 @@ export function verifyTelegramInitData(initData: string): SessionIdentity {
     displayName: [user.first_name, user.last_name].filter(Boolean).join(" "),
     username: user.username ?? "",
     avatarUrl: user.photo_url ?? null,
-    isAdmin: String(user.id) === process.env.ADMIN_CHAT_ID,
+    isAdmin: false,
   };
 }
 
@@ -84,10 +84,7 @@ export function getSession(req: Request): SessionIdentity | null {
             Buffer.from(payload, "base64url").toString(),
           ) as SessionIdentity;
           if (!identity.expiresAt || identity.expiresAt < Date.now()) return null;
-          return {
-            ...identity,
-            isAdmin: String(identity.id) === process.env.ADMIN_CHAT_ID,
-          };
+          return identity;
         } catch {
           return null;
         }

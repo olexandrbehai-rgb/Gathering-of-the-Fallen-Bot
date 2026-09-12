@@ -17,6 +17,7 @@ export const fallenUsersTable = pgTable("fallen_users", {
   avatarUrl: text("avatar_url"),
   subscribed: boolean("subscribed").notNull().default(false),
   isAdmin: boolean("is_admin").notNull().default(false),
+  adminRoleVersion: bigint("admin_role_version", { mode: "number" }).notNull().default(0),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true })
     .notNull()
@@ -47,6 +48,15 @@ export const fallenAiUsageTable = pgTable("fallen_ai_usage", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
+export const fallenAdminAuditTable = pgTable("fallen_admin_audit", {
+  id: serial("id").primaryKey(),
+  operationId: text("operation_id").notNull().unique(),
+  actorTelegramId: bigint("actor_telegram_id", { mode: "number" }).notNull(),
+  targetTelegramId: bigint("target_telegram_id", { mode: "number" }).notNull(),
+  action: text("action").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
 export const insertFallenUserSchema = createInsertSchema(fallenUsersTable);
 export const insertFallenFanPostSchema = createInsertSchema(fallenFanPostsTable).omit({
   id: true,
@@ -57,8 +67,14 @@ export const insertFallenAiUsageSchema = createInsertSchema(fallenAiUsageTable).
   id: true,
   createdAt: true,
 });
+export const insertFallenAdminAuditSchema = createInsertSchema(fallenAdminAuditTable).omit({
+  id: true,
+  createdAt: true,
+});
 
 export type FallenUser = typeof fallenUsersTable.$inferSelect;
 export type InsertFallenUser = z.infer<typeof insertFallenUserSchema>;
 export type InsertFallenFanPost = z.infer<typeof insertFallenFanPostSchema>;
 export type InsertFallenAiUsage = z.infer<typeof insertFallenAiUsageSchema>;
+export type FallenAdminAudit = typeof fallenAdminAuditTable.$inferSelect;
+export type InsertFallenAdminAudit = z.infer<typeof insertFallenAdminAuditSchema>;

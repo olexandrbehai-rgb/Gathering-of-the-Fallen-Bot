@@ -24,7 +24,12 @@ import sqlite3
 import tempfile
 import threading
 import time
+import urllib.error
 import urllib.parse
+import urllib.request
+import uuid
+import hashlib
+import hmac
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -656,6 +661,15 @@ def init_database() -> None:
                 detail TEXT,
                 created_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS admin_role_outbox (
+                operation_id TEXT PRIMARY KEY,
+                target_id INTEGER NOT NULL,
+                actor_id INTEGER NOT NULL,
+                is_admin INTEGER NOT NULL CHECK(is_admin IN (0, 1)),
+                version INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                synced_at TEXT
+            );
             CREATE TABLE IF NOT EXISTS metadata (
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
@@ -670,6 +684,8 @@ def init_database() -> None:
                 ON activity_events(chat_id, id DESC);
             CREATE INDEX IF NOT EXISTS idx_admin_audit_created
                 ON admin_audit(id DESC);
+            CREATE INDEX IF NOT EXISTS idx_admin_role_outbox_pending
+                ON admin_role_outbox(synced_at, version);
             """
         )
         if ADMIN_CHAT_ID:
@@ -847,7 +863,8 @@ def grant_admin(user_id: int, granted_by: int) -> bool:
             (user_id, granted_by, _now_iso()),
         )
         conn.commit()
-    record_admin_audit(granted_by, "grant_admin", user_id)
+    if exists is None:
+        record_admin_audit(granted_by, "grant_admin", user_id)
     return exists is None
 
 
@@ -862,6 +879,202 @@ def revoke_admin(user_id: int, revoked_by: int) -> bool:
     if cur.rowcount:
         record_admin_audit(revoked_by, "revoke_admin", user_id)
     return cur.rowcount > 0
+
+
+def queue_admin_role_change(
+    user_id: int, actor_id: int, is_admin: bool
+) -> dict[str, Any] | None:
+    """Queue a role operation; grants are applied locally before remote synchronization."""
+    now = _now_iso()
+    with _lock, _db() as conn:
+        pending = conn.execute(
+            """SELECT operation_id, target_id, actor_id, is_admin, version
+               FROM admin_role_outbox
+               WHERE target_id=? AND is_admin=? AND synced_at IS NULL
+               ORDER BY version DESC LIMIT 1""",
+            (user_id, int(is_admin)),
+        ).fetchone()
+        if pending:
+            return {**dict(pending), "is_admin": bool(pending["is_admin"])}
+        current = conn.execute(
+            "SELECT role FROM bot_admins WHERE user_id=?", (user_id,)
+        ).fetchone()
+        currently_admin = bool(current)
+        if currently_admin == is_admin:
+            return None
+        last = conn.execute(
+            "SELECT MAX(version) AS version FROM admin_role_outbox WHERE target_id=?",
+            (user_id,),
+        ).fetchone()
+        version = max(
+            int(time.time() * 1000),
+            int(last["version"] or 0) + 1,
+        )
+        operation_id = uuid.uuid4().hex
+        if is_admin:
+            conn.execute(
+                """INSERT INTO bot_admins(user_id, role, granted_by, granted_at)
+                   VALUES (?, 'admin', ?, ?)""",
+                (user_id, actor_id, now),
+            )
+            conn.execute(
+                """INSERT INTO admin_audit(actor_id, action, target_id, detail, created_at)
+                   VALUES (?, 'grant_admin', ?, NULL, ?)""",
+                (actor_id, user_id, now),
+            )
+        conn.execute(
+            """INSERT INTO admin_role_outbox
+               (operation_id, target_id, actor_id, is_admin, version, created_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (operation_id, user_id, actor_id, int(is_admin), version, now),
+        )
+        conn.commit()
+    return {
+        "operation_id": operation_id,
+        "target_id": user_id,
+        "actor_id": actor_id,
+        "is_admin": is_admin,
+        "version": version,
+    }
+
+
+def load_pending_admin_role_changes(limit: int = 20) -> list[dict]:
+    with _db() as conn:
+        rows = conn.execute(
+            """SELECT operation_id, target_id, actor_id, is_admin, version
+               FROM admin_role_outbox
+               WHERE synced_at IS NULL ORDER BY version LIMIT ?""",
+            (max(1, min(limit, 100)),),
+        ).fetchall()
+    return [
+        {**dict(row), "is_admin": bool(row["is_admin"])}
+        for row in rows
+    ]
+
+
+def enqueue_legacy_admin_role_backfill() -> int:
+    """Queue one-time Mini App grants for admins created before the shared role flow."""
+    migration_key = "admin_role_backfill_v1"
+    now = _now_iso()
+    queued = 0
+    with _lock, _db() as conn:
+        if conn.execute(
+            "SELECT 1 FROM metadata WHERE key=?", (migration_key,)
+        ).fetchone():
+            return 0
+        rows = conn.execute(
+            """SELECT user_id, granted_by FROM bot_admins
+               WHERE role='admin' ORDER BY granted_at, user_id"""
+        ).fetchall()
+        base_version = int(time.time() * 1000)
+        for index, row in enumerate(rows):
+            already_tracked = conn.execute(
+                "SELECT 1 FROM admin_role_outbox WHERE target_id=? LIMIT 1",
+                (row["user_id"],),
+            ).fetchone()
+            if already_tracked:
+                continue
+            conn.execute(
+                """INSERT INTO admin_role_outbox
+                   (operation_id, target_id, actor_id, is_admin, version, created_at)
+                   VALUES (?, ?, ?, 1, ?, ?)""",
+                (
+                    uuid.uuid4().hex,
+                    row["user_id"],
+                    row["granted_by"] or ADMIN_CHAT_ID or row["user_id"],
+                    base_version + index,
+                    now,
+                ),
+            )
+            queued += 1
+        conn.execute(
+            "INSERT INTO metadata(key, value) VALUES (?, ?)",
+            (migration_key, now),
+        )
+        conn.commit()
+    return queued
+
+
+def finalize_admin_role_change(operation: dict[str, Any]) -> None:
+    with _lock, _db() as conn:
+        if not operation["is_admin"]:
+            removed = conn.execute(
+                "DELETE FROM bot_admins WHERE user_id=? AND role='admin'",
+                (operation["target_id"],),
+            ).rowcount
+            if removed:
+                conn.execute(
+                    """INSERT INTO admin_audit
+                       (actor_id, action, target_id, detail, created_at)
+                       VALUES (?, 'revoke_admin', ?, NULL, ?)""",
+                    (
+                        operation["actor_id"],
+                        operation["target_id"],
+                        _now_iso(),
+                    ),
+                )
+        conn.execute(
+            "UPDATE admin_role_outbox SET synced_at=? WHERE operation_id=?",
+            (_now_iso(), operation["operation_id"]),
+        )
+        conn.commit()
+
+
+def _sync_mini_app_admin_role(operation: dict[str, Any]) -> None:
+    """Synchronize a bot role change to the Mini App's PostgreSQL store."""
+    timestamp = str(int(time.time() * 1000))
+    signed_value = (
+        f"{timestamp}.{operation['operation_id']}.{operation['version']}."
+        f"{operation['target_id']}.{str(operation['is_admin']).lower()}."
+        f"{operation['actor_id']}"
+    )
+    signature = hmac.new(
+        (TELEGRAM_TOKEN or "").encode(),
+        signed_value.encode(),
+        hashlib.sha256,
+    ).hexdigest()
+    payload = json.dumps(
+        {
+            "operationId": operation["operation_id"],
+            "version": operation["version"],
+            "targetId": operation["target_id"],
+            "actorId": operation["actor_id"],
+            "isAdmin": operation["is_admin"],
+        }
+    ).encode()
+    endpoint = urllib.parse.urljoin(BAND_SITE_URL.rstrip("/") + "/", "api/admin-roles/sync")
+    request = urllib.request.Request(
+        endpoint,
+        data=payload,
+        method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "X-Fallen-Timestamp": timestamp,
+            "X-Fallen-Signature": signature,
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            if response.status != 200:
+                raise RuntimeError(f"Mini App role sync returned HTTP {response.status}")
+    except (urllib.error.URLError, TimeoutError) as error:
+        raise RuntimeError("Не вдалося синхронізувати роль із Mini App") from error
+
+
+async def flush_pending_admin_role_changes(
+    _context: ContextTypes.DEFAULT_TYPE | None = None,
+) -> None:
+    for operation in load_pending_admin_role_changes():
+        try:
+            await asyncio.to_thread(_sync_mini_app_admin_role, operation)
+            finalize_admin_role_change(operation)
+        except RuntimeError as error:
+            log.warning(
+                "Mini App role synchronization remains pending for %s: %s",
+                operation["operation_id"],
+                error,
+            )
+            break
 
 
 def list_admins() -> list[dict]:
@@ -1188,6 +1401,12 @@ def get_voice_stats() -> dict[str, int]:
 
 
 init_database()
+legacy_admins_queued = enqueue_legacy_admin_role_backfill()
+if legacy_admins_queued:
+    log.info(
+        "Queued %d existing delegated admin role(s) for Mini App synchronization",
+        legacy_admins_queued,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -2695,9 +2914,28 @@ async def cmd_add_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
     target_id = int(context.args[0])
     actor_id = update.effective_user.id
-    created = grant_admin(target_id, actor_id)
+    if is_admin_id(target_id):
+        await update.message.reply_text(
+            f"ℹ️ `{target_id}` уже має права.",
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        return
+    operation = queue_admin_role_change(target_id, actor_id, True)
+    created = operation is not None
+    synced = False
+    if operation:
+        try:
+            await asyncio.to_thread(_sync_mini_app_admin_role, operation)
+            finalize_admin_role_change(operation)
+            synced = True
+        except RuntimeError:
+            log.exception("Mini App admin grant synchronization queued for retry")
     await update.message.reply_text(
-        f"✅ Права адміністратора надано `{target_id}`."
+        (
+            f"✅ Права адміністратора надано `{target_id}`."
+            if synced
+            else f"✅ Права в боті надано `{target_id}`; Mini App синхронізується автоматично."
+        )
         if created else f"ℹ️ `{target_id}` уже має права.",
         parse_mode=ParseMode.MARKDOWN,
     )
@@ -2710,9 +2948,34 @@ async def cmd_remove_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await update.message.reply_text("Формат: /removeadmin TelegramID")
         return
     target_id = int(context.args[0])
-    removed = revoke_admin(target_id, update.effective_user.id)
+    actor_id = update.effective_user.id
+    if is_owner_id(target_id):
+        await update.message.reply_text(
+            "⚠️ Адміна не знайдено або це власник, якого не можна видалити."
+        )
+        return
+    if not is_admin_id(target_id):
+        await update.message.reply_text("⚠️ Адміна не знайдено.")
+        return
+    operation = queue_admin_role_change(target_id, actor_id, False)
+    removed = operation is not None
+    synced = False
+    if operation:
+        try:
+            await asyncio.to_thread(_sync_mini_app_admin_role, operation)
+            finalize_admin_role_change(operation)
+            synced = True
+        except RuntimeError:
+            log.exception("Mini App admin revocation synchronization queued for retry")
     await update.message.reply_text(
-        f"✅ Права адміністратора забрано у `{target_id}`."
+        (
+            f"✅ Права адміністратора забрано у `{target_id}`."
+            if synced
+            else (
+                f"⏳ Відкликання прав для `{target_id}` очікує синхронізації. "
+                "До підтвердження права не змінено; бот повторить автоматично."
+            )
+        )
         if removed
         else "⚠️ Адміна не знайдено або це власник, якого не можна видалити.",
         parse_mode=ParseMode.MARKDOWN,
@@ -2987,6 +3250,12 @@ def start_keep_alive() -> None:
 
 def build_app() -> Application:
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+    app.job_queue.run_repeating(
+        flush_pending_admin_role_changes,
+        interval=60,
+        first=5,
+        name="admin-role-sync",
+    )
 
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("help", cmd_help))

@@ -1,7 +1,9 @@
+import { createHmac, timingSafeEqual } from "node:crypto";
 import { Router, type IRouter, type Request, type Response } from "express";
-import { and, count, desc, eq, gte } from "drizzle-orm";
+import { and, count, desc, eq, gte, lt } from "drizzle-orm";
 import {
   db,
+  fallenAdminAuditTable,
   fallenAiUsageTable,
   fallenFanPostsTable,
   fallenUsersTable,
@@ -31,13 +33,24 @@ const router: IRouter = Router();
 const FAN_POST_LIMIT = 3;
 const FAN_POST_WINDOW_MS = 10 * 60 * 1000;
 
-function identityOr401(req: Request, res: Response) {
+async function isCurrentAdmin(telegramId: number): Promise<boolean> {
+  if (process.env.NODE_ENV !== "production" && telegramId === 999000) return true;
+  if (String(telegramId) === process.env.ADMIN_CHAT_ID) return true;
+  const [user] = await db
+    .select({ isAdmin: fallenUsersTable.isAdmin })
+    .from(fallenUsersTable)
+    .where(eq(fallenUsersTable.telegramId, telegramId))
+    .limit(1);
+  return user?.isAdmin ?? false;
+}
+
+async function identityOr401(req: Request, res: Response) {
   const identity = getSession(req);
   if (!identity) {
     res.status(401).json({ error: "Open this experience from the Telegram bot." });
     return null;
   }
-  return identity;
+  return { ...identity, isAdmin: await isCurrentAdmin(identity.id) };
 }
 
 function normalize(value: string): string {
@@ -93,7 +106,11 @@ router.post("/auth/telegram", async (req, res): Promise<void> => {
     return;
   }
   try {
-    const identity = verifyTelegramInitData(parsed.data.initData);
+    const verifiedIdentity = verifyTelegramInitData(parsed.data.initData);
+    const identity = {
+      ...verifiedIdentity,
+      isAdmin: await isCurrentAdmin(verifiedIdentity.id),
+    };
     const [user] = await db
       .insert(fallenUsersTable)
       .values({
@@ -109,7 +126,6 @@ router.post("/auth/telegram", async (req, res): Promise<void> => {
           displayName: identity.displayName,
           username: identity.username,
           avatarUrl: identity.avatarUrl,
-          isAdmin: identity.isAdmin,
           updatedAt: new Date(),
         },
       })
@@ -131,8 +147,80 @@ router.post("/auth/telegram", async (req, res): Promise<void> => {
   }
 });
 
+router.post("/admin-roles/sync", async (req, res): Promise<void> => {
+  const botToken = process.env.TELEGRAM_TOKEN;
+  const timestamp = req.header("x-fallen-timestamp") ?? "";
+  const signature = req.header("x-fallen-signature") ?? "";
+  const targetId = Number(req.body?.targetId);
+  const actorId = Number(req.body?.actorId);
+  const isAdmin = req.body?.isAdmin;
+  const operationId = String(req.body?.operationId ?? "");
+  const version = Number(req.body?.version);
+  const signedValue = `${timestamp}.${operationId}.${version}.${targetId}.${isAdmin}.${actorId}`;
+  const expected = botToken
+    ? createHmac("sha256", botToken).update(signedValue).digest("hex")
+    : "";
+  const signatureBytes = Buffer.from(signature);
+  const expectedBytes = Buffer.from(expected);
+  const timestampMs = Number(timestamp);
+  const validSignature =
+    Boolean(botToken) &&
+    Number.isSafeInteger(timestampMs) &&
+    Math.abs(Date.now() - timestampMs) <= 5 * 60 * 1000 &&
+    signatureBytes.length === expectedBytes.length &&
+    timingSafeEqual(signatureBytes, expectedBytes);
+  if (
+    !validSignature ||
+    !Number.isSafeInteger(targetId) ||
+    targetId <= 0 ||
+    !Number.isSafeInteger(actorId) ||
+    actorId <= 0 ||
+    !/^[a-f0-9-]{32,36}$/i.test(operationId) ||
+    !Number.isSafeInteger(version) ||
+    version <= 0 ||
+    typeof isAdmin !== "boolean"
+  ) {
+    res.status(401).json({ error: "Role synchronization rejected." });
+    return;
+  }
+  if (String(targetId) === process.env.ADMIN_CHAT_ID && !isAdmin) {
+    res.status(409).json({ error: "The owner role cannot be revoked." });
+    return;
+  }
+  const applied = await db.transaction(async (tx) => {
+    const [updated] = await tx
+      .insert(fallenUsersTable)
+      .values({
+        telegramId: targetId,
+        displayName: `Telegram user ${targetId}`,
+        isAdmin,
+        adminRoleVersion: version,
+      })
+      .onConflictDoUpdate({
+        target: fallenUsersTable.telegramId,
+        set: { isAdmin, adminRoleVersion: version, updatedAt: new Date() },
+        setWhere: lt(fallenUsersTable.adminRoleVersion, version),
+      })
+      .returning({ telegramId: fallenUsersTable.telegramId });
+    if (updated) {
+      await tx.insert(fallenAdminAuditTable).values({
+        operationId,
+        actorTelegramId: actorId,
+        targetTelegramId: targetId,
+        action: isAdmin ? "grant_admin" : "revoke_admin",
+      }).onConflictDoNothing({ target: fallenAdminAuditTable.operationId });
+    }
+    return Boolean(updated);
+  });
+  req.log.info(
+    { actorTelegramId: actorId, targetTelegramId: targetId, isAdmin },
+    "Mini App admin role synchronized",
+  );
+  res.json({ targetId: String(targetId), isAdmin, applied });
+});
+
 router.get("/me", async (req, res): Promise<void> => {
-  const identity = identityOr401(req, res);
+  const identity = await identityOr401(req, res);
   if (!identity) return;
   const [user] = await db
     .select()
@@ -152,7 +240,7 @@ router.get("/me", async (req, res): Promise<void> => {
 });
 
 router.post("/subscription", async (req, res): Promise<void> => {
-  const identity = identityOr401(req, res);
+  const identity = await identityOr401(req, res);
   if (!identity) return;
   const parsed = UpdateSubscriptionBody.safeParse(req.body);
   if (!parsed.success) {
@@ -196,7 +284,7 @@ router.get("/fan-feed", async (_req, res): Promise<void> => {
 });
 
 router.post("/fan-feed", async (req, res): Promise<void> => {
-  const identity = identityOr401(req, res);
+  const identity = await identityOr401(req, res);
   if (!identity) return;
   const parsed = CreateFanPostBody.safeParse(req.body);
   if (!parsed.success) {
@@ -248,7 +336,7 @@ router.post("/fan-feed", async (req, res): Promise<void> => {
 });
 
 router.post("/fan-feed/:id/hide", async (req, res): Promise<void> => {
-  const identity = identityOr401(req, res);
+  const identity = await identityOr401(req, res);
   if (!identity) return;
   if (!identity.isAdmin) {
     res.status(403).json({ error: "Лише адміністратор може приховувати дописи." });
@@ -272,7 +360,7 @@ router.post("/fan-feed/:id/hide", async (req, res): Promise<void> => {
 });
 
 router.post("/assistant", async (req, res): Promise<void> => {
-  const identity = identityOr401(req, res);
+  const identity = await identityOr401(req, res);
   if (!identity) return;
   const parsed = AskAssistantBody.safeParse(req.body);
   if (!parsed.success) {
@@ -365,7 +453,7 @@ router.post("/assistant", async (req, res): Promise<void> => {
 });
 
 router.get("/usage/summary", async (req, res): Promise<void> => {
-  const identity = identityOr401(req, res);
+  const identity = await identityOr401(req, res);
   if (!identity) return;
   if (!identity.isAdmin) {
     res.status(403).json({ error: "Admin access required." });

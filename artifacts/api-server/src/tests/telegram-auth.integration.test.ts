@@ -15,6 +15,23 @@ let origin: string;
 let sessionCookie = "";
 let dbModule: typeof import("@workspace/db");
 
+function createRoleSyncHeaders(
+  operationId: string,
+  version: number,
+  targetId: number,
+  actorId: number,
+  isAdmin: boolean,
+): Record<string, string> {
+  const timestamp = String(Date.now());
+  const signedValue = `${timestamp}.${operationId}.${version}.${targetId}.${isAdmin}.${actorId}`;
+  return {
+    "x-fallen-timestamp": timestamp,
+    "x-fallen-signature": createHmac("sha256", BOT_TOKEN)
+      .update(signedValue)
+      .digest("hex"),
+  };
+}
+
 function createInitData(authDate: number): string {
   const params = new URLSearchParams({
     auth_date: String(authDate),
@@ -94,6 +111,9 @@ after(async () => {
     await dbModule.db
       .delete(dbModule.fallenAiUsageTable)
       .where(eq(dbModule.fallenAiUsageTable.telegramId, TEST_TELEGRAM_ID));
+    await dbModule.db
+      .delete(dbModule.fallenAdminAuditTable)
+      .where(eq(dbModule.fallenAdminAuditTable.targetTelegramId, TEST_TELEGRAM_ID));
     await dbModule.db
       .delete(dbModule.fallenUsersTable)
       .where(eq(dbModule.fallenUsersTable.telegramId, TEST_TELEGRAM_ID));
@@ -251,5 +271,130 @@ test("keeps profile, subscription, fan wall, and AI available through one same-o
   assert.equal(
     (await refreshedProfile.json() as { subscribed: boolean }).subscribed,
     true,
+  );
+});
+
+test("applies admin grants and revocations to an already active session", async () => {
+  const authenticated = await request("/api/auth/telegram", {
+    method: "POST",
+    body: JSON.stringify({
+      initData: createInitData(Math.floor(Date.now() / 1000)),
+    }),
+  });
+  assert.equal(authenticated.status, 200);
+  const activeCookie = authenticated.headers.get("set-cookie")?.split(";", 1)[0];
+  if (!activeCookie) assert.fail("Authentication did not set a session cookie");
+
+  const actorId = 999_001;
+  const grantOperationId = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+  const grantVersion = Date.now();
+  const grant = await request("/api/admin-roles/sync", {
+    method: "POST",
+    headers: createRoleSyncHeaders(
+      grantOperationId,
+      grantVersion,
+      TEST_TELEGRAM_ID,
+      actorId,
+      true,
+    ),
+    body: JSON.stringify({
+      operationId: grantOperationId,
+      version: grantVersion,
+      targetId: TEST_TELEGRAM_ID,
+      actorId,
+      isAdmin: true,
+    }),
+  });
+  assert.equal(grant.status, 200);
+  assert.equal((await grant.json() as { isAdmin: boolean }).isAdmin, true);
+
+  const adminProfile = await request("/api/me", {}, activeCookie);
+  assert.equal(adminProfile.status, 200);
+  assert.equal((await adminProfile.json() as { isAdmin: boolean }).isAdmin, true);
+  const adminUsage = await request("/api/usage/summary", {}, activeCookie);
+  assert.equal(adminUsage.status, 200);
+
+  const revokeOperationId = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+  const revokeVersion = grantVersion + 1;
+  const revoke = await request("/api/admin-roles/sync", {
+    method: "POST",
+    headers: createRoleSyncHeaders(
+      revokeOperationId,
+      revokeVersion,
+      TEST_TELEGRAM_ID,
+      actorId,
+      false,
+    ),
+    body: JSON.stringify({
+      operationId: revokeOperationId,
+      version: revokeVersion,
+      targetId: TEST_TELEGRAM_ID,
+      actorId,
+      isAdmin: false,
+    }),
+  });
+  assert.equal(revoke.status, 200);
+
+  const revokedProfile = await request("/api/me", {}, activeCookie);
+  assert.equal(revokedProfile.status, 200);
+  assert.equal((await revokedProfile.json() as { isAdmin: boolean }).isAdmin, false);
+  const revokedUsage = await request("/api/usage/summary", {}, activeCookie);
+  assert.equal(revokedUsage.status, 403);
+
+  const replayedGrant = await request("/api/admin-roles/sync", {
+    method: "POST",
+    headers: createRoleSyncHeaders(
+      grantOperationId,
+      grantVersion,
+      TEST_TELEGRAM_ID,
+      actorId,
+      true,
+    ),
+    body: JSON.stringify({
+      operationId: grantOperationId,
+      version: grantVersion,
+      targetId: TEST_TELEGRAM_ID,
+      actorId,
+      isAdmin: true,
+    }),
+  });
+  assert.equal(replayedGrant.status, 200);
+  assert.equal((await replayedGrant.json() as { applied: boolean }).applied, false);
+  const profileAfterReplay = await request("/api/me", {}, activeCookie);
+  assert.equal(
+    (await profileAfterReplay.json() as { isAdmin: boolean }).isAdmin,
+    false,
+  );
+
+  const invalidSignature = await request("/api/admin-roles/sync", {
+    method: "POST",
+    headers: {
+      "x-fallen-timestamp": String(Date.now()),
+      "x-fallen-signature": "invalid",
+    },
+    body: JSON.stringify({
+      operationId: "cccccccccccccccccccccccccccccccc",
+      version: revokeVersion + 1,
+      targetId: TEST_TELEGRAM_ID,
+      actorId,
+      isAdmin: true,
+    }),
+  });
+  assert.equal(invalidSignature.status, 401);
+
+  const auditRows = await dbModule.db
+    .select()
+    .from(dbModule.fallenAdminAuditTable)
+    .where(eq(dbModule.fallenAdminAuditTable.targetTelegramId, TEST_TELEGRAM_ID));
+  assert.deepEqual(
+    auditRows.map(({ actorTelegramId, action, createdAt }) => ({
+      actorTelegramId,
+      action,
+      hasTimestamp: createdAt instanceof Date,
+    })),
+    [
+      { actorTelegramId: actorId, action: "grant_admin", hasTimestamp: true },
+      { actorTelegramId: actorId, action: "revoke_admin", hasTimestamp: true },
+    ],
   );
 });

@@ -33,6 +33,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const { data: me, isLoading: isMeLoading, refetch: refetchMe } = useGetMe({
     query: {
       retry: false,
+      refetchInterval: 15_000,
+      refetchOnWindowFocus: true,
       queryKey: getGetMeQueryKey(),
     }
   });

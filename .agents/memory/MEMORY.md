@@ -1,0 +1,1 @@
+- [Admin role sync ordering](admin-role-sync-ordering.md) — finalize revocations only after the Mini App authorization store confirms them; use durable ordered retries.

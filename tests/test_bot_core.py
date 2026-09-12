@@ -5,7 +5,7 @@ import unittest
 from datetime import datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, patch
 
 os.environ.setdefault("TELEGRAM_TOKEN", "123456:TESTTOKEN")
 os.environ.setdefault("OPENAI_API_KEY", "diagnostic-placeholder")
@@ -291,6 +291,79 @@ class BotCoreTests(unittest.TestCase):
             self.assertIn("revoke_admin", actions)
         finally:
             main.ADMIN_CHAT_ID = original_admin
+
+    def test_admin_command_queues_retry_without_losing_local_change(self) -> None:
+        original_admin = main.ADMIN_CHAT_ID
+        main.ADMIN_CHAT_ID = 999
+        message = SimpleNamespace(reply_text=AsyncMock())
+        update = SimpleNamespace(
+            effective_user=SimpleNamespace(id=999),
+            message=message,
+        )
+        context = SimpleNamespace(args=["101"])
+        try:
+            main.init_database()
+            with patch.object(
+                main,
+                "_sync_mini_app_admin_role",
+                side_effect=RuntimeError("web unavailable"),
+            ):
+                asyncio.run(main.cmd_add_admin(update, context))
+            self.assertTrue(main.is_admin_id(101))
+            pending = main.load_pending_admin_role_changes()
+            self.assertEqual(len(pending), 1)
+            self.assertEqual(pending[0]["target_id"], 101)
+            self.assertTrue(pending[0]["is_admin"])
+            self.assertIn(
+                "синхронізується автоматично",
+                message.reply_text.await_args.args[0],
+            )
+            audit = main.load_admin_audit()
+            self.assertEqual(audit[0]["action"], "grant_admin")
+            self.assertEqual(audit[0]["actor_id"], 999)
+        finally:
+            main.ADMIN_CHAT_ID = original_admin
+
+    def test_failed_revocation_stays_pending_without_claiming_success(self) -> None:
+        original_admin = main.ADMIN_CHAT_ID
+        main.ADMIN_CHAT_ID = 999
+        main.grant_admin(101, 999)
+        message = SimpleNamespace(reply_text=AsyncMock())
+        update = SimpleNamespace(
+            effective_user=SimpleNamespace(id=999),
+            message=message,
+        )
+        context = SimpleNamespace(args=["101"])
+        try:
+            with patch.object(
+                main,
+                "_sync_mini_app_admin_role",
+                side_effect=RuntimeError("web unavailable"),
+            ):
+                asyncio.run(main.cmd_remove_admin(update, context))
+            self.assertTrue(main.is_admin_id(101))
+            self.assertIn("очікує синхронізації", message.reply_text.await_args.args[0])
+            pending = main.load_pending_admin_role_changes()
+            self.assertEqual(len(pending), 1)
+            self.assertFalse(pending[0]["is_admin"])
+            self.assertNotIn(
+                "revoke_admin",
+                [row["action"] for row in main.load_admin_audit()],
+            )
+        finally:
+            main.ADMIN_CHAT_ID = original_admin
+
+    def test_existing_admin_is_backfilled_once_for_mini_app(self) -> None:
+        main.grant_admin(101, 999)
+        self.assertEqual(main.load_pending_admin_role_changes(), [])
+
+        self.assertEqual(main.enqueue_legacy_admin_role_backfill(), 1)
+        pending = main.load_pending_admin_role_changes()
+        self.assertEqual(len(pending), 1)
+        self.assertEqual(pending[0]["target_id"], 101)
+        self.assertTrue(pending[0]["is_admin"])
+        self.assertEqual(main.enqueue_legacy_admin_role_backfill(), 0)
+        self.assertEqual(len(main.load_pending_admin_role_changes()), 1)
 
     def test_activity_and_user_overview_capture_interest_without_text_body(self) -> None:
         update = SimpleNamespace(
