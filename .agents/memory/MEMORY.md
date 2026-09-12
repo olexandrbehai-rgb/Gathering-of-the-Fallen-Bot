@@ -1,2 +1,3 @@
 - [Admin role sync ordering](admin-role-sync-ordering.md) — finalize revocations only after the Mini App authorization store confirms them; use durable ordered retries.
 - [Telegram Mini App deployment](telegram-mini-app-deployment.md) — the Render web service and Telegram worker deploy separately; keyboard URL changes require worker redeploy and a fresh /start.
+- [Render pnpm version](render-pnpm-version.md) — pin Corepack's pnpm version in package metadata and the Render build command.

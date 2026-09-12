@@ -88,6 +88,7 @@ VOICE_REPLY_DAILY_LIMIT = int(os.environ.get("VOICE_REPLY_DAILY_LIMIT", "10"))
 VOICE_USAGE_WARNING_PERCENT = max(
     1, min(100, int(os.environ.get("VOICE_USAGE_WARNING_PERCENT", "80")))
 )
+VOICE_USAGE_WARNING_PERCENT_METADATA_KEY = "voice_usage_warning_percent"
 OPENAI_TTS_MODEL = os.environ.get("OPENAI_TTS_MODEL", "gpt-4o-mini-tts")
 OPENAI_TTS_VOICE = os.environ.get("OPENAI_TTS_VOICE", "onyx")
 
@@ -587,6 +588,7 @@ def _save_json(path: Path, data: Any) -> None:
 
 def init_database() -> None:
     """Створює схему та одноразово переносить старі JSON-дані в SQLite."""
+    global VOICE_USAGE_WARNING_PERCENT
     with _lock, _db() as conn:
         conn.executescript(
             """
@@ -694,6 +696,22 @@ def init_database() -> None:
                 ON admin_role_outbox(synced_at, version);
             """
         )
+        stored_warning_percent = conn.execute(
+            "SELECT value FROM metadata WHERE key=?",
+            (VOICE_USAGE_WARNING_PERCENT_METADATA_KEY,),
+        ).fetchone()
+        if stored_warning_percent:
+            try:
+                persisted_percent = int(stored_warning_percent["value"])
+            except (TypeError, ValueError):
+                persisted_percent = 0
+            if 1 <= persisted_percent <= 100:
+                VOICE_USAGE_WARNING_PERCENT = persisted_percent
+            else:
+                log.warning(
+                    "Ignoring invalid persisted voice usage warning threshold: %r",
+                    stored_warning_percent["value"],
+                )
         if ADMIN_CHAT_ID:
             conn.execute(
                 """INSERT INTO bot_admins(user_id, role, granted_by, granted_at)
@@ -770,7 +788,21 @@ def init_database() -> None:
         )
         conn.commit()
 
-
+def get_voice_usage_warning_percent() -> int:
+    """Повертає активний поріг попередження, включно зі збереженим значенням."""
+    with _db() as conn:
+        row = conn.execute(
+            "SELECT value FROM metadata WHERE key=?",
+            (VOICE_USAGE_WARNING_PERCENT_METADATA_KEY,),
+        ).fetchone()
+    if row:
+        try:
+            persisted_percent = int(row["value"])
+        except (TypeError, ValueError):
+            persisted_percent = 0
+        if 1 <= persisted_percent <= 100:
+            return persisted_percent
+    return VOICE_USAGE_WARNING_PERCENT
 def touch_user(update: Update) -> None:
     user = update.effective_user
     chat = update.effective_chat
@@ -2922,6 +2954,7 @@ async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/admins — список адміністраторів\n"
         "/addadmin TelegramID — надати права (тільки власник)\n"
         "/removeadmin TelegramID — забрати права (тільки власник)\n"
+        "/voicewarning [відсоток] — поріг голосового попередження (власник)\n"
         "/broadcast текст — розсилка підписникам\n"
         "/release назва | URL | опис — додати реліз і розіслати\n"
         "/hidepost ID — сховати допис фан-чату\n"
@@ -2930,7 +2963,47 @@ async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         parse_mode=ParseMode.MARKDOWN,
     )
 
+async def cmd_voice_warning(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await _require_owner(update):
+        return
+    if len(context.args) > 1:
+        await update.message.reply_text(
+            "Формат: /voicewarning [ціле число від 1 до 100]"
+        )
+        return
+    if not context.args:
+        percent = get_voice_usage_warning_percent()
+        await update.message.reply_text(
+            f"🎙️ Поточний поріг попередження: {percent}%.\n"
+            "Щоб змінити його, надішліть /voicewarning 75."
+        )
+        return
 
+    raw_percent = context.args[0].strip()
+    if not raw_percent.isdecimal():
+        await update.message.reply_text(
+            "⚠️ Некоректний поріг. Вкажіть ціле число від 1 до 100 "
+            "(без знака %), наприклад: /voicewarning 80."
+        )
+        return
+    percent = int(raw_percent)
+    if not 1 <= percent <= 100:
+        await update.message.reply_text(
+            "⚠️ Некоректний поріг. Значення має бути в межах від 1 до 100%."
+        )
+        return
+
+    previous_percent = get_voice_usage_warning_percent()
+    set_voice_usage_warning_percent(percent)
+    record_admin_audit(
+        update.effective_user.id,
+        "set_voice_warning_percent",
+        detail=f"from={previous_percent}; to={percent}",
+    )
+    await update.message.reply_text(
+        f"✅ Поріг попередження змінено: {previous_percent}% → {percent}%.\n"
+        "Нове значення застосовується без перезапуску бота."
+    )
 def _command_limit(args: list[str], default: int = 20) -> int:
     if not args:
         return default
@@ -3325,6 +3398,7 @@ def build_app() -> Application:
     app.add_handler(CommandHandler("admins", cmd_admins))
     app.add_handler(CommandHandler("addadmin", cmd_add_admin))
     app.add_handler(CommandHandler("removeadmin", cmd_remove_admin))
+    app.add_handler(CommandHandler("voicewarning", cmd_voice_warning))
     app.add_handler(CommandHandler("users", cmd_users))
     app.add_handler(CommandHandler("userinfo", cmd_userinfo))
     app.add_handler(CommandHandler("activity", cmd_activity))
@@ -3473,9 +3547,10 @@ def _claim_voice_usage_warning() -> dict[str, int] | None:
     """Атомарно резервує єдине денне попередження після досягнення порога."""
     usage_date = datetime.now().astimezone().date().isoformat()
     warning_key = f"voice_usage_warning:{usage_date}"
+    warning_percent = get_voice_usage_warning_percent()
     threshold = max(
         1,
-        math.ceil(VOICE_REPLY_DAILY_LIMIT * VOICE_USAGE_WARNING_PERCENT / 100),
+        math.ceil(VOICE_REPLY_DAILY_LIMIT * warning_percent / 100),
     )
     with _lock, _db() as conn:
         today_count = conn.execute(
@@ -3495,7 +3570,7 @@ def _claim_voice_usage_warning() -> dict[str, int] | None:
     return {
         "today": int(today_count),
         "limit": VOICE_REPLY_DAILY_LIMIT,
-        "percent": VOICE_USAGE_WARNING_PERCENT,
+        "percent": warning_percent,
     }
 
 
@@ -3569,3 +3644,19 @@ async def _send_voice_reply(message, chat_id: int, text: str) -> str:
     finally:
         if path:
             Path(path).unlink(missing_ok=True)
+
+def set_voice_usage_warning_percent(percent: int) -> None:
+    """Зберігає поріг і застосовує його до наступних голосових відповідей."""
+    global VOICE_USAGE_WARNING_PERCENT
+    if isinstance(percent, bool) or not isinstance(percent, int):
+        raise ValueError("Поріг має бути цілим числом від 1 до 100.")
+    if not 1 <= percent <= 100:
+        raise ValueError("Поріг має бути в межах від 1 до 100%.")
+    with _lock, _db() as conn:
+        conn.execute(
+            """INSERT INTO metadata(key, value) VALUES (?, ?)
+               ON CONFLICT(key) DO UPDATE SET value=excluded.value""",
+            (VOICE_USAGE_WARNING_PERCENT_METADATA_KEY, str(percent)),
+        )
+        conn.commit()
+    VOICE_USAGE_WARNING_PERCENT = percent

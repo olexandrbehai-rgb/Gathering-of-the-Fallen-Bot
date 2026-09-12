@@ -291,6 +291,55 @@ class BotCoreTests(unittest.TestCase):
             main.VOICE_REPLY_DAILY_LIMIT = original_limit
             main.VOICE_USAGE_WARNING_PERCENT = original_percent
 
+    def test_voice_warning_threshold_is_persistent_and_runtime_configurable(self) -> None:
+        original_percent = main.VOICE_USAGE_WARNING_PERCENT
+        try:
+            main.set_voice_usage_warning_percent(35)
+            self.assertEqual(main.get_voice_usage_warning_percent(), 35)
+            main.VOICE_USAGE_WARNING_PERCENT = 99
+            main.init_database()
+            self.assertEqual(main.get_voice_usage_warning_percent(), 35)
+            self.assertEqual(main.VOICE_USAGE_WARNING_PERCENT, 35)
+        finally:
+            main.VOICE_USAGE_WARNING_PERCENT = original_percent
+
+    def test_voice_warning_command_requires_owner_and_rejects_invalid_values(self) -> None:
+        original_admin = main.ADMIN_CHAT_ID
+        original_percent = main.VOICE_USAGE_WARNING_PERCENT
+        main.ADMIN_CHAT_ID = 999
+        message = SimpleNamespace(reply_text=AsyncMock())
+        update = SimpleNamespace(
+            effective_user=SimpleNamespace(id=999),
+            message=message,
+        )
+        try:
+            for raw_percent in ("0", "101", "abc", "80%"):
+                message.reply_text.reset_mock()
+                asyncio.run(
+                    main.cmd_voice_warning(
+                        update, SimpleNamespace(args=[raw_percent])
+                    )
+                )
+                self.assertIn("Некоректний поріг", message.reply_text.await_args.args[0])
+
+            message.reply_text.reset_mock()
+            asyncio.run(main.cmd_voice_warning(update, SimpleNamespace(args=[])))
+            self.assertIn("Поточний поріг", message.reply_text.await_args.args[0])
+
+            message.reply_text.reset_mock()
+            asyncio.run(
+                main.cmd_voice_warning(update, SimpleNamespace(args=["45"]))
+            )
+            self.assertEqual(main.get_voice_usage_warning_percent(), 45)
+            self.assertIn("застосовується без перезапуску", message.reply_text.await_args.args[0])
+            self.assertEqual(
+                main.load_admin_audit(limit=1)[0]["action"],
+                "set_voice_warning_percent",
+            )
+        finally:
+            main.ADMIN_CHAT_ID = original_admin
+            main.VOICE_USAGE_WARNING_PERCENT = original_percent
+
     def test_voice_usage_warning_contains_only_aggregate_numbers(self) -> None:
         original_admin = main.ADMIN_CHAT_ID
         original_limit = main.VOICE_REPLY_DAILY_LIMIT
