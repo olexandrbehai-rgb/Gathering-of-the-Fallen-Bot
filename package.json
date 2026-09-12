@@ -5,6 +5,7 @@
   "scripts": {
     "preinstall": "sh -c 'rm -f package-lock.json yarn.lock; case \"$npm_config_user_agent\" in pnpm/*) ;; *) echo \"Use pnpm instead\" >&2; exit 1 ;; esac'",
     "build": "pnpm run typecheck && pnpm -r --if-present run build",
+    "catalog:youtube": "python scripts/import_youtube_catalog.py",
     "typecheck:libs": "tsc --build",
     "validate:catalog": "python scripts/validate_fallen_catalog.py",
     "typecheck": "pnpm run validate:catalog && pnpm run typecheck:libs && pnpm -r --filter \"./artifacts/**\" --filter \"./scripts\" --if-present run typecheck"
