@@ -9,13 +9,15 @@ Telegram-бот українського онлайн-метал гурту "Gat
 - Mini App/API: окремі Replit artifacts `fallen-mini-app` та `api-server`.
 - Required secrets: `TELEGRAM_TOKEN`, `OPENAI_API_KEY`, `ADMIN_CHAT_ID`.
 - Optional env: `OPENAI_MODEL`, `OPENAI_TRANSCRIBE_MODEL`, `BAND_SITE_URL`,
-  `AI_COOLDOWN_SECONDS`, `MAX_MESSAGE_CHARS`, `MAX_FAN_MESSAGE_CHARS`.
+  `OPENAI_TTS_MODEL`, `OPENAI_TTS_VOICE`, `AI_COOLDOWN_SECONDS`,
+  `VOICE_REPLY_MAX_CHARS`, `VOICE_REPLY_DAILY_LIMIT`, `MAX_MESSAGE_CHARS`,
+  `MAX_FAN_MESSAGE_CHARS`.
 
 ## Stack
 
 - Python 3.11
 - `python-telegram-bot` 21.x (async, polling)
-- `openai` SDK (Chat Completions + function tools + transcription)
+- `openai` SDK (Chat Completions + function tools + transcription + AI TTS)
 - SQLite: `data/gathering.sqlite3`; старі JSON-файли мігруються автоматично.
 - Mini App: React/Vite + generated OpenAPI client; API: Express + PostgreSQL.
 
@@ -40,7 +42,7 @@ Telegram-бот українського онлайн-метал гурту "Gat
 ## Product
 
 Користувачі: `/start`, `/help`, `/about`, `/tracks`, `/clips`, `/search`, `/subscribe`,
-`/unsubscribe`, `/feedback`, `/fanclub`, `/resetai`, `/privacy`.
+`/unsubscribe`, `/feedback`, `/fanclub`, `/resetai`, `/privacy`, `/voice`.
 Адмін: `/admin`, `/stats`, `/broadcast`, `/release`, `/hidepost`.
 Текст або голосове повідомлення → AI-відповідь у фірмовому темному метал-стилі.
 

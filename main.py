@@ -76,6 +76,10 @@ BAND_SITE_URL = os.environ.get(
 AI_COOLDOWN_SECONDS = float(os.environ.get("AI_COOLDOWN_SECONDS", "4"))
 MAX_MESSAGE_CHARS = int(os.environ.get("MAX_MESSAGE_CHARS", "1800"))
 MAX_FAN_MESSAGE_CHARS = int(os.environ.get("MAX_FAN_MESSAGE_CHARS", "600"))
+VOICE_REPLY_MAX_CHARS = int(os.environ.get("VOICE_REPLY_MAX_CHARS", "700"))
+VOICE_REPLY_DAILY_LIMIT = int(os.environ.get("VOICE_REPLY_DAILY_LIMIT", "10"))
+OPENAI_TTS_MODEL = os.environ.get("OPENAI_TTS_MODEL", "gpt-4o-mini-tts")
+OPENAI_TTS_VOICE = os.environ.get("OPENAI_TTS_VOICE", "onyx")
 
 if not TELEGRAM_TOKEN:
     raise RuntimeError("Не задано TELEGRAM_TOKEN у Secrets.")
@@ -518,6 +522,17 @@ def init_database() -> None:
                 description TEXT,
                 published_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS user_settings (
+                chat_id INTEGER PRIMARY KEY,
+                voice_replies_enabled INTEGER NOT NULL DEFAULT 0,
+                FOREIGN KEY(chat_id) REFERENCES users(chat_id) ON DELETE CASCADE
+            );
+            CREATE TABLE IF NOT EXISTS voice_usage (
+                chat_id INTEGER NOT NULL,
+                usage_date TEXT NOT NULL,
+                reply_count INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY(chat_id, usage_date)
+            );
             CREATE TABLE IF NOT EXISTS metadata (
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
@@ -745,7 +760,13 @@ def save_history(chat_id: int, role: str, content: str) -> None:
         )
         conn.commit()
 
-
+def voice_replies_enabled(chat_id: int) -> bool:
+    with _db() as conn:
+        row = conn.execute(
+            "SELECT voice_replies_enabled FROM user_settings WHERE chat_id=?",
+            (chat_id,),
+        ).fetchone()
+    return bool(row and row["voice_replies_enabled"])
 def clear_history(chat_id: int) -> None:
     with _lock, _db() as conn:
         conn.execute(
@@ -762,6 +783,7 @@ def delete_user_data(chat_id: int) -> None:
         )
         conn.execute("DELETE FROM feedback WHERE chat_id=?", (chat_id,))
         conn.execute("DELETE FROM fan_messages WHERE chat_id=?", (chat_id,))
+        conn.execute("DELETE FROM voice_usage WHERE chat_id=?", (chat_id,))
         conn.execute("DELETE FROM users WHERE chat_id=?", (chat_id,))
         conn.commit()
 
@@ -1247,7 +1269,9 @@ async def _close_menu(context: ContextTypes.DEFAULT_TYPE, chat) -> None:
         pass
 
 
-def _menu_markup() -> InlineKeyboardMarkup:
+def _menu_markup(chat_id: int | None = None) -> InlineKeyboardMarkup:
+    voice_on = bool(chat_id is not None and voice_replies_enabled(chat_id))
+    voice_label = "🔊 Голосові відповіді: увімк." if voice_on else "🔇 Голосові відповіді: вимк."
     return InlineKeyboardMarkup([
         [
             InlineKeyboardButton(
@@ -1271,6 +1295,7 @@ def _menu_markup() -> InlineKeyboardMarkup:
             InlineKeyboardButton(BTN_FEEDBACK,  callback_data="menu:feedback"),
             InlineKeyboardButton(BTN_DONATE,    callback_data="menu:donate"),
         ],
+        [InlineKeyboardButton(voice_label, callback_data="voice:toggle")],
         [InlineKeyboardButton("❌ Сховати меню", callback_data="menu:hide")],
     ])
 
@@ -1287,7 +1312,7 @@ async def _open_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     await _cleanup_last_section(context, chat)
     sent = await chat.send_message(
         f"{BRAND_DIVIDER}\n*Меню* 🖤\nОбирай розділ ⬇️\n\n_{BRAND_SIGN}_",
-        reply_markup=_menu_markup(),
+        reply_markup=_menu_markup(chat.id),
         parse_mode=ParseMode.MARKDOWN,
     )
     context.user_data["last_menu_msg_id"] = sent.message_id
@@ -1452,6 +1477,7 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/unsubscribe — відписка\n"
         "/feedback <текст> — лишити відгук\n"
         "/resetai — очистити історію AI\n"
+        "/voice — увімкнути або вимкнути голосові AI-відповіді\n"
         "/deletedata CONFIRM — видалити свої дані\n"
         "/privacy — як обробляються дані\n\n"
         "🤘 *Фан-чат*: відкривається кнопкою, "
@@ -1758,6 +1784,18 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         )
         return
 
+    if data == "voice:toggle":
+        chat_id = update.effective_chat.id
+        enabled = not voice_replies_enabled(chat_id)
+        set_voice_replies(chat_id, enabled)
+        await query.answer(
+            "Голосові AI-відповіді увімкнено." if enabled
+            else "Голосові AI-відповіді вимкнено.",
+            show_alert=True,
+        )
+        await query.edit_message_reply_markup(reply_markup=_menu_markup(chat_id))
+        return
+
     await query.answer()
     if data == "noop":
         return
@@ -2053,6 +2091,13 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         reply = QUOTA_MESSAGE
     # plain text — AI-вивід може містити сирий Markdown, який ламає парсинг
     await update.message.reply_text(reply, reply_markup=MAIN_KEYBOARD)
+    voice_status = await _send_voice_reply(update.message, chat_id, reply)
+    if voice_status == "limit":
+        await update.message.reply_text(
+            f"🔇 Денний ліміт голосових відповідей ({VOICE_REPLY_DAILY_LIMIT}) "
+            "вичерпано. Текстові відповіді працюють без змін.",
+            reply_markup=MAIN_KEYBOARD,
+        )
 
 
 async def on_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -2104,6 +2149,13 @@ async def on_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             f"🎙️ Почув: {text[:500]}\n\n{reply}",
             reply_markup=MAIN_KEYBOARD,
         )
+        voice_status = await _send_voice_reply(message, chat_id, reply)
+        if voice_status == "limit":
+            await message.reply_text(
+                f"🔇 Денний ліміт голосових відповідей "
+                f"({VOICE_REPLY_DAILY_LIMIT}) вичерпано.",
+                reply_markup=MAIN_KEYBOARD,
+            )
     except AIQuotaError:
         await message.reply_text(QUOTA_MESSAGE, reply_markup=MAIN_KEYBOARD)
     except Exception as e:
@@ -2201,7 +2253,24 @@ async def cmd_privacy(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         text, parse_mode=ParseMode.MARKDOWN, reply_markup=MAIN_KEYBOARD
     )
 
-
+async def cmd_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Вмикає/вимикає озвучення AI-відповідей для поточного користувача."""
+    touch_user(update)
+    chat_id = update.effective_chat.id
+    arg = context.args[0].casefold() if context.args else ""
+    if arg in {"on", "увімкнути", "увімк"}:
+        enabled = True
+    elif arg in {"off", "вимкнути", "вимк"}:
+        enabled = False
+    else:
+        enabled = not voice_replies_enabled(chat_id)
+    set_voice_replies(chat_id, enabled)
+    status = "увімкнено 🔊" if enabled else "вимкнено 🔇"
+    await update.message.reply_text(
+        f"Голосові AI-відповіді {status}.\n"
+        "Текстова відповідь завжди залишається доступною.",
+        reply_markup=MAIN_KEYBOARD,
+    )
 async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await _require_admin(update):
         return
@@ -2389,6 +2458,7 @@ def build_app() -> Application:
     app.add_handler(CommandHandler("search", cmd_search))
     app.add_handler(CommandHandler("resetai", cmd_reset_ai))
     app.add_handler(CommandHandler("privacy", cmd_privacy))
+    app.add_handler(CommandHandler("voice", cmd_voice))
     app.add_handler(CommandHandler("admin", cmd_admin))
     app.add_handler(CommandHandler("stats", cmd_stats))
     app.add_handler(CommandHandler("broadcast", cmd_broadcast))
@@ -2461,3 +2531,108 @@ def _run_forever() -> None:
 
 if __name__ == "__main__":
     _run_forever()
+
+def set_voice_replies(chat_id: int, enabled: bool) -> None:
+    now = _now_iso()
+    with _lock, _db() as conn:
+        conn.execute(
+            """INSERT OR IGNORE INTO users
+               (chat_id, username, first_name, language_code, created_at, last_seen_at)
+               VALUES (?, NULL, NULL, NULL, ?, ?)""",
+            (chat_id, now, now),
+        )
+        conn.execute(
+            """INSERT INTO user_settings(chat_id, voice_replies_enabled)
+               VALUES (?, ?)
+               ON CONFLICT(chat_id) DO UPDATE SET
+                   voice_replies_enabled=excluded.voice_replies_enabled""",
+            (chat_id, int(enabled)),
+        )
+        conn.commit()
+
+def _shorten_for_voice(text: str, max_chars: int | None = None) -> str:
+    """Скорочує довгий текст на межі речення без додаткового AI-запиту."""
+    limit = max_chars or VOICE_REPLY_MAX_CHARS
+    clean = re.sub(r"https?://\S+", "Посилання є в текстовій відповіді.", text)
+    clean = re.sub(r"[*_`#\[\]]", "", clean)
+    clean = re.sub(r"\s+", " ", clean).strip()
+    if len(clean) <= limit:
+        return clean
+    candidate = clean[: limit + 1]
+    boundaries = [candidate.rfind(mark) for mark in (". ", "! ", "? ", "… ")]
+    cut = max(boundaries)
+    if cut >= max(120, limit // 2):
+        return candidate[: cut + 1].strip()
+    return clean[: limit - 1].rstrip(" ,;:-") + "…"
+
+def _reserve_voice_reply(chat_id: int) -> bool:
+    """Атомарно резервує одну TTS-відповідь у денному бюджеті."""
+    usage_date = datetime.now().astimezone().date().isoformat()
+    with _lock, _db() as conn:
+        row = conn.execute(
+            "SELECT reply_count FROM voice_usage WHERE chat_id=? AND usage_date=?",
+            (chat_id, usage_date),
+        ).fetchone()
+        if row and row["reply_count"] >= VOICE_REPLY_DAILY_LIMIT:
+            return False
+        conn.execute(
+            """INSERT INTO voice_usage(chat_id, usage_date, reply_count)
+               VALUES (?, ?, 1)
+               ON CONFLICT(chat_id, usage_date) DO UPDATE SET
+                   reply_count=reply_count + 1""",
+            (chat_id, usage_date),
+        )
+        conn.execute(
+            "DELETE FROM voice_usage WHERE usage_date < date('now', '-8 days')"
+        )
+        conn.commit()
+    return True
+
+def _release_voice_reply(chat_id: int) -> None:
+    """Повертає резерв, якщо голосове не вдалося створити або доставити."""
+    usage_date = datetime.now().astimezone().date().isoformat()
+    with _lock, _db() as conn:
+        conn.execute(
+            """UPDATE voice_usage
+               SET reply_count=MAX(0, reply_count - 1)
+               WHERE chat_id=? AND usage_date=?""",
+            (chat_id, usage_date),
+        )
+        conn.commit()
+
+async def _send_voice_reply(message, chat_id: int, text: str) -> str:
+    """Надсилає AI TTS як Telegram voice; повертає статус для логування/UX."""
+    if not voice_replies_enabled(chat_id):
+        return "disabled"
+    if not _reserve_voice_reply(chat_id):
+        return "limit"
+    spoken_text = _shorten_for_voice(text)
+    if not spoken_text:
+        return "empty"
+
+    path = ""
+    try:
+        await message.chat.send_action(ChatAction.RECORD_VOICE)
+        with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as tmp:
+            path = tmp.name
+        response = await openai_client.audio.speech.create(
+            model=OPENAI_TTS_MODEL,
+            voice=OPENAI_TTS_VOICE,
+            input=spoken_text,
+            response_format="opus",
+        )
+        await asyncio.to_thread(response.write_to_file, path)
+        with open(path, "rb") as audio_file:
+            await message.reply_voice(
+                voice=audio_file,
+                caption="🎙️ AI-відповідь",
+                reply_markup=MAIN_KEYBOARD,
+            )
+        return "sent"
+    except Exception as e:
+        _release_voice_reply(chat_id)
+        log.warning("TTS voice reply failed for chat %s: %s", chat_id, e)
+        return "error"
+    finally:
+        if path:
+            Path(path).unlink(missing_ok=True)

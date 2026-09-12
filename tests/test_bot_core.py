@@ -3,6 +3,8 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
 
 os.environ.setdefault("TELEGRAM_TOKEN", "123456:TESTTOKEN")
 os.environ.setdefault("OPENAI_API_KEY", "diagnostic-placeholder")
@@ -120,6 +122,95 @@ class BotCoreTests(unittest.TestCase):
             self.assertNotIn("temperature", options)
         finally:
             main.OPENAI_MODEL = original
+
+    def test_voice_setting_is_persistent_and_deleted_with_user(self) -> None:
+        self.assertFalse(main.voice_replies_enabled(101))
+        main.set_voice_replies(101, True)
+        self.assertTrue(main.voice_replies_enabled(101))
+        main.delete_user_data(101)
+        self.assertFalse(main.voice_replies_enabled(101))
+
+    def test_voice_text_is_cleaned_and_shortened(self) -> None:
+        text = (
+            "**Перше речення** про трек. "
+            "Друге речення з https://example.com/дуже-довгим-посиланням. "
+            "Третє речення не повинно потрапити повністю."
+        )
+        shortened = main._shorten_for_voice(text, max_chars=85)
+        self.assertLessEqual(len(shortened), 85)
+        self.assertNotIn("**", shortened)
+        self.assertNotIn("https://", shortened)
+        self.assertTrue(shortened.endswith((".", "!", "?", "…")))
+
+    def test_daily_voice_limit_is_enforced(self) -> None:
+        original = main.VOICE_REPLY_DAILY_LIMIT
+        try:
+            main.VOICE_REPLY_DAILY_LIMIT = 2
+            self.assertTrue(main._reserve_voice_reply(101))
+            self.assertTrue(main._reserve_voice_reply(101))
+            self.assertFalse(main._reserve_voice_reply(101))
+        finally:
+            main.VOICE_REPLY_DAILY_LIMIT = original
+
+    def test_tts_opus_is_sent_as_telegram_voice(self) -> None:
+        main.set_voice_replies(101, True)
+        response = Mock()
+
+        def write_audio(path: str) -> None:
+            Path(path).write_bytes(b"OggS-test-opus")
+
+        response.write_to_file.side_effect = write_audio
+        create = AsyncMock(return_value=response)
+        original_client = main.openai_client
+        main.openai_client = SimpleNamespace(
+            audio=SimpleNamespace(speech=SimpleNamespace(create=create))
+        )
+        message = SimpleNamespace(
+            chat=SimpleNamespace(send_action=AsyncMock()),
+            reply_voice=AsyncMock(),
+        )
+        try:
+            status = asyncio.run(
+                main._send_voice_reply(message, 101, "Коротка AI-відповідь.")
+            )
+        finally:
+            main.openai_client = original_client
+
+        self.assertEqual(status, "sent")
+        create.assert_awaited_once()
+        self.assertEqual(create.await_args.kwargs["response_format"], "opus")
+        message.reply_voice.assert_awaited_once()
+
+    def test_tts_failure_keeps_fallback_and_refunds_limit(self) -> None:
+        main.set_voice_replies(101, True)
+        original_client = main.openai_client
+        original_limit = main.VOICE_REPLY_DAILY_LIMIT
+        main.VOICE_REPLY_DAILY_LIMIT = 1
+        main.openai_client = SimpleNamespace(
+            audio=SimpleNamespace(
+                speech=SimpleNamespace(create=AsyncMock(side_effect=RuntimeError("TTS down")))
+            )
+        )
+        message = SimpleNamespace(
+            chat=SimpleNamespace(send_action=AsyncMock()),
+            reply_voice=AsyncMock(),
+        )
+        try:
+            status = asyncio.run(
+                main._send_voice_reply(message, 101, "Текстовий fallback уже надіслано.")
+            )
+        finally:
+            main.openai_client = original_client
+            main.VOICE_REPLY_DAILY_LIMIT = original_limit
+
+        self.assertEqual(status, "error")
+        message.reply_voice.assert_not_awaited()
+        original_limit = main.VOICE_REPLY_DAILY_LIMIT
+        try:
+            main.VOICE_REPLY_DAILY_LIMIT = 1
+            self.assertTrue(main._reserve_voice_reply(101))
+        finally:
+            main.VOICE_REPLY_DAILY_LIMIT = original_limit
 
 
 if __name__ == "__main__":

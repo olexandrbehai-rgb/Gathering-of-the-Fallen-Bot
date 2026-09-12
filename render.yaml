@@ -18,12 +18,20 @@ services:
         value: gpt-4o-mini
       - key: OPENAI_TRANSCRIBE_MODEL
         value: gpt-4o-mini-transcribe
+      - key: OPENAI_TTS_MODEL
+        value: gpt-4o-mini-tts
+      - key: OPENAI_TTS_VOICE
+        value: onyx
       - key: ADMIN_CHAT_ID
         sync: false
       - key: BAND_SITE_URL
         value: https://gathering-of-the-fallen.replit.app/
       - key: AI_COOLDOWN_SECONDS
         value: "4"
+      - key: VOICE_REPLY_MAX_CHARS
+        value: "700"
+      - key: VOICE_REPLY_DAILY_LIMIT
+        value: "10"
     disk:
       name: bot-data
       mountPath: /opt/render/project/src/data
