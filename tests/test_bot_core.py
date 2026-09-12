@@ -373,6 +373,35 @@ class BotCoreTests(unittest.TestCase):
             main.VOICE_REPLY_DAILY_LIMIT = original_limit
             main.VOICE_USAGE_WARNING_PERCENT = original_percent
 
+    def test_voice_usage_warning_remains_claimed_after_database_reinitialization(
+        self,
+    ) -> None:
+        original_limit = main.VOICE_REPLY_DAILY_LIMIT
+        original_percent = main.VOICE_USAGE_WARNING_PERCENT
+        try:
+            main.VOICE_REPLY_DAILY_LIMIT = 10
+            main.VOICE_USAGE_WARNING_PERCENT = 80
+            today = datetime.now().astimezone().date().isoformat()
+            with main._db() as conn:
+                conn.executemany(
+                    """INSERT INTO voice_usage(chat_id, usage_date, reply_count)
+                       VALUES (?, ?, ?)""",
+                    [(101, today, 4), (202, today, 4)],
+                )
+                conn.commit()
+
+            self.assertEqual(
+                main._claim_voice_usage_warning(),
+                {"today": 8, "limit": 10, "percent": 80},
+            )
+
+            main.init_database()
+
+            self.assertIsNone(main._claim_voice_usage_warning())
+        finally:
+            main.VOICE_REPLY_DAILY_LIMIT = original_limit
+            main.VOICE_USAGE_WARNING_PERCENT = original_percent
+
     def test_voice_usage_warning_is_claimed_once_under_concurrent_spike(self) -> None:
         original_limit = main.VOICE_REPLY_DAILY_LIMIT
         original_percent = main.VOICE_USAGE_WARNING_PERCENT
