@@ -183,6 +183,78 @@ class BotCoreTests(unittest.TestCase):
         finally:
             main.VOICE_REPLY_DAILY_LIMIT = original
 
+    def test_voice_message_is_transcribed_and_gets_text_response_for_any_user(self) -> None:
+        original_client = main.openai_client
+        transcription = AsyncMock(
+            return_value=SimpleNamespace(text="Розкажи про гурт")
+        )
+        main.openai_client = SimpleNamespace(
+            audio=SimpleNamespace(transcriptions=SimpleNamespace(create=transcription))
+        )
+        tg_file = SimpleNamespace()
+
+        async def download_to_drive(path: str) -> None:
+            Path(path).write_bytes(b"OggS-test-voice")
+
+        tg_file.download_to_drive = download_to_drive
+        message = SimpleNamespace(
+            voice=SimpleNamespace(
+                file_id="voice-file",
+                file_size=1024,
+                duration=4,
+                mime_type="audio/ogg",
+            ),
+            audio=None,
+            chat=SimpleNamespace(id=101, send_action=AsyncMock()),
+            reply_text=AsyncMock(),
+        )
+        update = SimpleNamespace(
+            effective_user=SimpleNamespace(
+                id=101,
+                username="fan",
+                first_name="Fan",
+                full_name="Fan",
+                language_code="uk",
+            ),
+            effective_chat=SimpleNamespace(id=101),
+            effective_message=message,
+        )
+        context = SimpleNamespace(
+            bot=SimpleNamespace(
+                get_file=AsyncMock(return_value=tg_file),
+            )
+        )
+        original_ai_reply = main.ai_reply
+        original_send_voice_reply = main._send_voice_reply
+        ai_reply_mock = AsyncMock(
+            return_value="Наш гурт поєднує метал і українську лірику."
+        )
+        main.ai_reply = ai_reply_mock
+        main._send_voice_reply = AsyncMock(return_value="disabled")
+        try:
+            asyncio.run(main.on_voice(update, context))
+        finally:
+            main.openai_client = original_client
+            main.ai_reply = original_ai_reply
+            main._send_voice_reply = original_send_voice_reply
+
+        transcription.assert_awaited_once()
+        self.assertEqual(
+            transcription.await_args.kwargs["model"],
+            os.environ.get("OPENAI_TRANSCRIBE_MODEL", "gpt-4o-mini-transcribe"),
+        )
+        ai_reply_mock.assert_awaited_once_with(
+            "Розкажи про гурт",
+            [],
+            chat_id=101,
+            username="fan",
+        )
+        sent_text = "\n".join(
+            call.args[0] for call in message.reply_text.await_args_list
+        )
+        self.assertIn("Почув: Розкажи про гурт", sent_text)
+        self.assertIn("Наш гурт поєднує", sent_text)
+
     def test_voice_usage_warning_is_claimed_only_once_per_day(self) -> None:
         original_limit = main.VOICE_REPLY_DAILY_LIMIT
         original_percent = main.VOICE_USAGE_WARNING_PERCENT

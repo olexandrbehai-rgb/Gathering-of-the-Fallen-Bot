@@ -18,6 +18,7 @@ import asyncio
 import json
 import logging
 import math
+import mimetypes
 import os
 import re
 import sqlite3
@@ -2681,6 +2682,56 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
 
 
+def _telegram_audio_suffix(message: Any, media: Any) -> str:
+    """Повертає розширення, яке OpenAI може визначити для Telegram-аудіо."""
+    if getattr(message, "voice", None):
+        return ".ogg"
+    mime_type = (getattr(media, "mime_type", None) or "").lower()
+    suffix = mimetypes.guess_extension(mime_type) if mime_type else None
+    if suffix in {".mp3", ".mp4", ".m4a", ".mpeg", ".mpga", ".ogg", ".wav", ".webm", ".flac"}:
+        return suffix
+    file_name = getattr(media, "file_name", None) or ""
+    file_suffix = Path(file_name).suffix.lower()
+    if file_suffix in {".mp3", ".mp4", ".m4a", ".mpeg", ".mpga", ".ogg", ".wav", ".webm", ".flac"}:
+        return file_suffix
+    return ".mp3"
+
+
+async def _transcribe_audio(path: str) -> str:
+    """Розпізнає аудіо; за потреби переходить на сумісну Whisper-модель."""
+    configured_model = os.environ.get(
+        "OPENAI_TRANSCRIBE_MODEL", "gpt-4o-mini-transcribe"
+    )
+    models = [configured_model]
+    if configured_model != "whisper-1":
+        models.append("whisper-1")
+
+    for index, model in enumerate(models):
+        try:
+            with open(path, "rb") as audio_file:
+                kwargs: dict[str, Any] = {
+                    "model": model,
+                    "file": audio_file,
+                    "prompt": (
+                        "Розпізнавай українську та англійську мови. "
+                        "Зберігай назву гурту Gathering Of The Fallen і назви треків."
+                    ),
+                }
+                transcript = await openai_client.audio.transcriptions.create(**kwargs)
+            return (transcript.text or "").strip()
+        except Exception as exc:
+            status_code = getattr(exc, "status_code", None)
+            can_fallback = index == 0 and status_code in {400, 404}
+            if not can_fallback:
+                raise
+            log.warning(
+                "Transcription model %s unavailable (%s); falling back to whisper-1",
+                model,
+                exc,
+            )
+    return ""
+
+
 async def on_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Розпізнає голос/аудіо та продовжує той самий AI-діалог."""
     touch_user(update)
@@ -2702,21 +2753,14 @@ async def on_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     await _forward_to_admin(context, update, "🎙️ Голосове у бот")
     await message.chat.send_action(ChatAction.TYPING)
-    suffix = ".ogg" if message.voice else ".mp3"
+    suffix = _telegram_audio_suffix(message, media)
     path = ""
     try:
         tg_file = await context.bot.get_file(media.file_id)
         with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
             path = tmp.name
         await tg_file.download_to_drive(path)
-        with open(path, "rb") as audio_file:
-            transcript = await openai_client.audio.transcriptions.create(
-                model=os.environ.get(
-                    "OPENAI_TRANSCRIBE_MODEL", "gpt-4o-mini-transcribe"
-                ),
-                file=audio_file,
-            )
-        text = (transcript.text or "").strip()
+        text = await _transcribe_audio(path)
         if not text:
             await message.reply_text("🕯️ Не вдалося розібрати голос.")
             return
