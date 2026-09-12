@@ -24,7 +24,7 @@ import tempfile
 import threading
 import time
 import urllib.parse
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -831,6 +831,29 @@ def get_stats() -> dict[str, int]:
             "feedback": conn.execute("SELECT COUNT(*) FROM feedback").fetchone()[0],
             "ai_messages": conn.execute(
                 "SELECT COUNT(*) FROM conversation_messages"
+            ).fetchone()[0],
+        }
+
+
+def get_voice_stats() -> dict[str, int]:
+    """Повертає лише агреговані показники TTS, без текстів повідомлень."""
+    today = datetime.now().astimezone().date()
+    week_start = today - timedelta(days=6)
+    with _db() as conn:
+        return {
+            "today": conn.execute(
+                "SELECT COALESCE(SUM(reply_count), 0) FROM voice_usage "
+                "WHERE usage_date=?",
+                (today.isoformat(),),
+            ).fetchone()[0],
+            "last_7_days": conn.execute(
+                "SELECT COALESCE(SUM(reply_count), 0) FROM voice_usage "
+                "WHERE usage_date BETWEEN ? AND ?",
+                (week_start.isoformat(), today.isoformat()),
+            ).fetchone()[0],
+            "enabled_users": conn.execute(
+                "SELECT COUNT(*) FROM user_settings "
+                "WHERE voice_replies_enabled=1"
             ).fetchone()[0],
         }
 
@@ -2290,13 +2313,18 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await _require_admin(update):
         return
     stats = get_stats()
+    voice_stats = get_voice_stats()
     await update.message.reply_text(
         "📊 *Статистика Gathering Of The Fallen*\n\n"
         f"👥 Користувачі: {stats['users']}\n"
         f"🔔 Підписники: {stats['subscriptions']}\n"
         f"🕯️ Дописи біля вогнища: {stats['fan_messages']}\n"
         f"💬 Відгуки: {stats['feedback']}\n"
-        f"🤖 Повідомлення AI: {stats['ai_messages']}",
+        f"🤖 Повідомлення AI: {stats['ai_messages']}\n\n"
+        "🎙️ *Голосові відповіді*\n"
+        f"Сьогодні: {voice_stats['today']}\n"
+        f"За останні 7 днів: {voice_stats['last_7_days']}\n"
+        f"Голос увімкнули: {voice_stats['enabled_users']}",
         parse_mode=ParseMode.MARKDOWN,
     )
 

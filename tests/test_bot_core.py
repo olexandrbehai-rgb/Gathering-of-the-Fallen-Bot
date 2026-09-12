@@ -2,6 +2,7 @@ import asyncio
 import os
 import tempfile
 import unittest
+from datetime import datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
@@ -151,6 +152,48 @@ class BotCoreTests(unittest.TestCase):
             self.assertFalse(main._reserve_voice_reply(101))
         finally:
             main.VOICE_REPLY_DAILY_LIMIT = original
+
+    def test_voice_stats_aggregate_usage_without_message_texts(self) -> None:
+        today = datetime.now().astimezone().date()
+        main.set_voice_replies(101, True)
+        main.set_voice_replies(202, True)
+        main.set_voice_replies(303, False)
+        with main._db() as conn:
+            conn.executemany(
+                """INSERT INTO voice_usage(chat_id, usage_date, reply_count)
+                   VALUES (?, ?, ?)""",
+                [
+                    (101, today.isoformat(), 2),
+                    (202, (today - timedelta(days=6)).isoformat(), 3),
+                    (303, (today - timedelta(days=7)).isoformat(), 20),
+                ],
+            )
+            conn.commit()
+
+        self.assertEqual(
+            main.get_voice_stats(),
+            {"today": 2, "last_7_days": 5, "enabled_users": 2},
+        )
+
+    def test_admin_stats_message_includes_voice_usage(self) -> None:
+        original_admin = main.ADMIN_CHAT_ID
+        main.ADMIN_CHAT_ID = 999
+        main.set_voice_replies(101, True)
+        self.assertTrue(main._reserve_voice_reply(101))
+        message = SimpleNamespace(reply_text=AsyncMock())
+        update = SimpleNamespace(
+            effective_user=SimpleNamespace(id=999),
+            message=message,
+        )
+        try:
+            asyncio.run(main.cmd_stats(update, SimpleNamespace()))
+        finally:
+            main.ADMIN_CHAT_ID = original_admin
+
+        text = message.reply_text.await_args.args[0]
+        self.assertIn("Сьогодні: 1", text)
+        self.assertIn("За останні 7 днів: 1", text)
+        self.assertIn("Голос увімкнули: 1", text)
 
     def test_tts_opus_is_sent_as_telegram_voice(self) -> None:
         main.set_voice_replies(101, True)
