@@ -1,6 +1,8 @@
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 import os
 import tempfile
+from threading import Barrier
 import unittest
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -287,6 +289,40 @@ class BotCoreTests(unittest.TestCase):
                 {"today": 8, "limit": 10, "percent": 80},
             )
             self.assertIsNone(main._claim_voice_usage_warning())
+        finally:
+            main.VOICE_REPLY_DAILY_LIMIT = original_limit
+            main.VOICE_USAGE_WARNING_PERCENT = original_percent
+
+    def test_voice_usage_warning_is_claimed_once_under_concurrent_spike(self) -> None:
+        original_limit = main.VOICE_REPLY_DAILY_LIMIT
+        original_percent = main.VOICE_USAGE_WARNING_PERCENT
+        attempt_count = 8
+        start_gate = Barrier(attempt_count)
+        try:
+            main.VOICE_REPLY_DAILY_LIMIT = 10
+            main.VOICE_USAGE_WARNING_PERCENT = 80
+            today = datetime.now().astimezone().date().isoformat()
+            with main._db() as conn:
+                conn.executemany(
+                    """INSERT INTO voice_usage(chat_id, usage_date, reply_count)
+                       VALUES (?, ?, ?)""",
+                    [(chat_id, today, 1) for chat_id in range(101, 109)],
+                )
+                conn.commit()
+
+            def claim_after_start_gate(_attempt: int) -> dict[str, int] | None:
+                start_gate.wait(timeout=5)
+                return main._claim_voice_usage_warning()
+
+            with ThreadPoolExecutor(max_workers=attempt_count) as executor:
+                claims = list(executor.map(claim_after_start_gate, range(attempt_count)))
+
+            successful_claims = [claim for claim in claims if claim is not None]
+            self.assertEqual(
+                successful_claims,
+                [{"today": 8, "limit": 10, "percent": 80}],
+            )
+            self.assertEqual(claims.count(None), attempt_count - 1)
         finally:
             main.VOICE_REPLY_DAILY_LIMIT = original_limit
             main.VOICE_USAGE_WARNING_PERCENT = original_percent
