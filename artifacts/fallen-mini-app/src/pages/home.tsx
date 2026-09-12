@@ -41,16 +41,29 @@ import { cn } from "@/lib/utils";
 import { useQueryClient } from "@tanstack/react-query";
 import { getGetMeQueryKey } from "@workspace/api-client-react";
 
-// Background Assets - Assuming these are generated and available in the provided output path
-import heroBg from "@assets/generated_images/hero-bg.jpg";
-import navMusic from "@assets/generated_images/nav-music.jpg";
-import navVideos from "@assets/generated_images/nav-videos.jpg";
-import navOracle from "@assets/generated_images/nav-oracle.jpg";
-import navCoven from "@assets/generated_images/nav-coven.jpg";
+// Use the user's original reference artwork unchanged.
+import heroBg from "@assets/6b23015f-0f7b-4e54-b5d6-fbd286150615_1789191789114.png";
 
-type View = "home" | "music" | "videos" | "oracle" | "coven";
+type View =
+  | "home"
+  | "music"
+  | "videos"
+  | "oracle"
+  | "coven"
+  | "about"
+  | "gallery"
+  | "contact";
 
-const views: View[] = ["home", "music", "videos", "oracle", "coven"];
+const views: View[] = [
+  "home",
+  "music",
+  "videos",
+  "oracle",
+  "coven",
+  "about",
+  "gallery",
+  "contact",
+];
 
 function viewFromHash(): View {
   if (typeof window === "undefined") return "home";
@@ -182,6 +195,15 @@ export default function Home() {
         {activeView === "coven" && (
           <CovenView onBack={() => navigateTo("home")} />
         )}
+        {activeView === "about" && (
+          <AboutView onBack={() => navigateTo("home")} />
+        )}
+        {activeView === "gallery" && (
+          <GalleryView onBack={() => navigateTo("home")} />
+        )}
+        {activeView === "contact" && (
+          <ContactView onBack={() => navigateTo("home")} />
+        )}
       </div>
     </div>
   );
@@ -196,27 +218,19 @@ function HomeView({ onNavigate }: { onNavigate: (view: View) => void }) {
   return (
     <div className="flex-1 flex flex-col w-full min-h-[100dvh] pb-12 animate-in fade-in duration-700">
       {/* Hero Section */}
-      <div className="relative pt-24 pb-16 px-6 flex flex-col items-center justify-center min-h-[45vh] overflow-hidden">
-        {/* Background Image with Overlays */}
+      <div className="relative pt-16 pb-8 px-6 flex flex-col items-center justify-end min-h-[45vh] overflow-hidden">
+        {/* The original user artwork is kept unchanged. */}
         <div className="absolute inset-0 z-0">
           <img
             src={heroBg}
-            alt="Темний гірський краєвид Gathering Of The Fallen"
-            className="w-full h-full object-cover opacity-40 scale-105 animate-[pulse_20s_ease-in-out_infinite_alternate]"
+            alt="Оригінальний арт Gathering Of The Fallen"
+            className="w-full h-full object-cover object-top"
           />
-          <div className="absolute inset-0 bg-gradient-to-b from-background/40 via-background/60 to-background"></div>
+          <div className="absolute inset-0 bg-gradient-to-b from-background/15 via-background/25 to-background"></div>
           <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,_transparent_0%,_var(--tw-gradient-stops))] from-transparent to-background"></div>
         </div>
 
         <div className="relative z-10 flex flex-col items-center mt-auto w-full">
-          <h1 className="font-serif text-[2.5rem] leading-[1.1] font-black tracking-[0.25em] text-center text-foreground drop-shadow-[0_0_20px_rgba(168,85,247,0.4)] mb-4">
-            GATHERING
-            <br />
-            <span className="text-primary/90 text-2xl tracking-[0.35em] font-light block my-1">
-              OF THE
-            </span>
-            FALLEN
-          </h1>
           <div className="flex items-center gap-4 w-full max-w-[280px] my-6">
             <div className="h-[1px] flex-1 bg-gradient-to-r from-transparent via-primary/50 to-transparent"></div>
             <p className="text-[9px] uppercase tracking-[0.3em] text-muted-foreground/80 font-medium whitespace-nowrap">
@@ -230,35 +244,55 @@ function HomeView({ onNavigate }: { onNavigate: (view: View) => void }) {
       </div>
 
       {/* Navigation Grid */}
-      <div className="relative z-10 px-4 flex flex-col gap-4 mt-2">
-        <div className="grid grid-cols-2 gap-4">
+      <div className="relative z-10 px-4 flex flex-col gap-3 mt-2">
+        <div className="grid grid-cols-3 gap-3">
           <NavCard
             title="МУЗИКА"
-            image={navMusic}
             icon={Disc}
             onClick={() => onNavigate("music")}
           />
           <NavCard
             title="ВІДЕО"
-            image={navVideos}
             icon={Tv}
             onClick={() => onNavigate("videos")}
           />
-        </div>
-        <div className="grid grid-cols-2 gap-4">
           <NavCard
-            title="ОРАКУЛ"
-            image={navOracle}
-            icon={Compass}
-            onClick={() => onNavigate("oracle")}
-          />
-          <NavCard
-            title="КОВЕН"
-            image={navCoven}
+            title="ПРО ГУРТ"
             icon={Users}
-            onClick={() => onNavigate("coven")}
+            onClick={() => onNavigate("about")}
           />
         </div>
+        <div className="grid grid-cols-2 gap-3">
+          <NavCard
+            title="ГАЛЕРЕЯ"
+            icon={Film}
+            onClick={() => onNavigate("gallery")}
+          />
+          <NavCard
+            title="КОНТАКТИ"
+            icon={MessageSquare}
+            onClick={() => onNavigate("contact")}
+          />
+        </div>
+      </div>
+
+      <div className="relative z-10 mt-4 grid grid-cols-2 gap-3 px-4">
+        <button
+          type="button"
+          onClick={() => onNavigate("oracle")}
+          data-testid="button-open-oracle"
+          className="rounded-full border border-primary/25 bg-primary/10 px-4 py-3 text-[10px] font-bold uppercase tracking-[0.2em] text-primary transition-colors hover:bg-primary/20"
+        >
+          Оракул
+        </button>
+        <button
+          type="button"
+          onClick={() => onNavigate("coven")}
+          data-testid="button-open-coven"
+          className="rounded-full border border-accent/25 bg-accent/10 px-4 py-3 text-[10px] font-bold uppercase tracking-[0.2em] text-accent transition-colors hover:bg-accent/20"
+        >
+          Ковен
+        </button>
       </div>
 
       {/* Footer Quote */}
@@ -281,32 +315,27 @@ function HomeView({ onNavigate }: { onNavigate: (view: View) => void }) {
 
 function NavCard({
   title,
-  image,
   icon: Icon,
   onClick,
 }: {
   title: string;
-  image: string;
   icon: any;
   onClick: () => void;
 }) {
   return (
     <button
+      type="button"
       onClick={onClick}
-      className="nav-card group aspect-[4/3] flex flex-col items-center justify-end p-4 text-left w-full relative"
+      data-testid={`button-open-${title.toLowerCase().replaceAll(" ", "-")}`}
+      className="nav-card group aspect-[1/1.05] flex flex-col items-center justify-end p-3 text-left w-full relative"
     >
-      <img
-        src={image}
-        alt={title}
-        className="absolute inset-0 w-full h-full object-cover opacity-50 mix-blend-screen transition-transform duration-1000 group-hover:scale-110 group-hover:opacity-70"
-      />
       <div className="absolute inset-0 bg-gradient-to-t from-background via-background/40 to-transparent"></div>
 
       <div className="relative z-10 w-full flex flex-col items-center justify-center gap-3">
-        <div className="w-10 h-10 rounded-full border border-primary/20 bg-background/50 backdrop-blur flex items-center justify-center mb-1 group-hover:border-primary/50 transition-colors">
+        <div className="w-10 h-10 rounded-full border border-primary/30 bg-primary/10 backdrop-blur flex items-center justify-center mb-1 group-hover:border-accent/70 group-hover:bg-accent/15 transition-colors">
           <Icon className="w-4 h-4 text-primary/80 group-hover:text-primary transition-colors" />
         </div>
-        <span className="font-serif text-[11px] uppercase tracking-[0.25em] font-bold text-foreground/90 group-hover:text-primary-foreground transition-colors">
+        <span className="font-serif text-[10px] uppercase tracking-[0.15em] font-bold text-foreground/90 group-hover:text-primary-foreground transition-colors text-center">
           {title}
         </span>
       </div>
@@ -582,6 +611,133 @@ function MoodButton({
     >
       {children}
     </button>
+  );
+}
+
+// ==========================================
+// ABOUT, GALLERY & CONTACT
+// ==========================================
+function AboutView({ onBack }: { onBack: () => void }) {
+  return (
+    <div className="flex-1 flex flex-col animate-in fade-in slide-in-from-bottom-8 duration-500 bg-background pb-20">
+      <ViewHeader title="Про гурт" onBack={onBack} />
+      <div className="p-5 space-y-8">
+        <section className="rounded-2xl border border-primary/25 bg-secondary/40 p-6">
+          <div className="mb-5 flex items-center gap-3 text-primary">
+            <Skull className="h-6 w-6" />
+            <span className="text-[10px] font-bold uppercase tracking-[0.25em]">
+              Gathering Of The Fallen
+            </span>
+          </div>
+          <h3 className="font-serif text-2xl font-bold leading-tight">
+            Музика для тих, хто проходить крізь темряву.
+          </h3>
+          <p className="mt-4 text-sm leading-relaxed text-muted-foreground">
+            Пісні про пам’ять, силу, вигнання та повернення до себе. Тут кожна
+            композиція — окрема історія, а кожен слухач є частиною спільного
+            простору.
+          </p>
+        </section>
+        <div className="grid gap-3">
+          <a
+            href="https://www.youtube.com/@gathering_of_the_fallen"
+            target="_blank"
+            rel="noreferrer"
+            className="flex items-center justify-between rounded-xl border border-border/60 bg-secondary/30 p-4 text-sm transition-colors hover:border-accent/70 hover:text-accent"
+          >
+            Офіційний YouTube
+            <Play className="h-4 w-4" />
+          </a>
+          <a
+            href="https://music.youtube.com/@gathering_of_the_fallen"
+            target="_blank"
+            rel="noreferrer"
+            className="flex items-center justify-between rounded-xl border border-border/60 bg-secondary/30 p-4 text-sm transition-colors hover:border-accent/70 hover:text-accent"
+          >
+            YouTube Music
+            <Music2 className="h-4 w-4" />
+          </a>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function GalleryView({ onBack }: { onBack: () => void }) {
+  const { data: videos, isLoading } = useListVideos();
+
+  return (
+    <div className="flex-1 flex flex-col animate-in fade-in slide-in-from-bottom-8 duration-500 bg-background pb-20">
+      <ViewHeader title="Галерея" onBack={onBack} />
+      <div className="p-5">
+        {isLoading ? (
+          <LoadingState />
+        ) : (
+          <div className="grid grid-cols-2 gap-3">
+            {videos?.map((video) => (
+              <a
+                key={video.id}
+                href={video.youtubeUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="group overflow-hidden rounded-xl border border-border/50 bg-secondary/30 transition-colors hover:border-accent/70"
+              >
+                <div className="relative aspect-square overflow-hidden">
+                  <img
+                    src={video.thumbnailUrl}
+                    alt={video.title}
+                    className="h-full w-full object-cover opacity-80 transition duration-700 group-hover:scale-105 group-hover:opacity-100"
+                  />
+                  <div className="absolute inset-0 bg-gradient-to-t from-background via-transparent to-transparent" />
+                  <Play className="absolute bottom-3 left-3 h-5 w-5 text-primary" />
+                </div>
+                <p className="line-clamp-2 p-3 font-serif text-xs leading-relaxed">
+                  {video.title}
+                </p>
+              </a>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ContactView({ onBack }: { onBack: () => void }) {
+  return (
+    <div className="flex-1 flex flex-col animate-in fade-in slide-in-from-bottom-8 duration-500 bg-background pb-20">
+      <ViewHeader title="Контакти" onBack={onBack} />
+      <div className="p-5 space-y-6">
+        <section className="rounded-2xl border border-accent/25 bg-accent/10 p-6">
+          <MessageSquare className="mb-5 h-7 w-7 text-accent" />
+          <h3 className="font-serif text-2xl font-bold">Залишайтеся поруч</h3>
+          <p className="mt-3 text-sm leading-relaxed text-muted-foreground">
+            Слухайте нові композиції, дивіться кліпи та повертайтеся до простору
+            гурту в Telegram.
+          </p>
+        </section>
+        <div className="grid gap-3">
+          <a
+            href="https://www.youtube.com/@gathering_of_the_fallen"
+            target="_blank"
+            rel="noreferrer"
+            className="flex items-center justify-between rounded-xl border border-border/60 bg-secondary/30 p-4 text-sm transition-colors hover:border-primary/70 hover:text-primary"
+          >
+            YouTube
+            <Play className="h-4 w-4" />
+          </a>
+          <a
+            href="https://music.youtube.com/@gathering_of_the_fallen"
+            target="_blank"
+            rel="noreferrer"
+            className="flex items-center justify-between rounded-xl border border-border/60 bg-secondary/30 p-4 text-sm transition-colors hover:border-primary/70 hover:text-primary"
+          >
+            YouTube Music
+            <Music2 className="h-4 w-4" />
+          </a>
+        </div>
+      </div>
+    </div>
   );
 }
 
