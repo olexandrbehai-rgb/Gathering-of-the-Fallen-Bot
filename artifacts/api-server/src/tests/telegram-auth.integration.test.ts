@@ -343,6 +343,42 @@ test("applies admin grants and revocations to an already active session", async 
   const adminUsage = await request("/api/usage/summary", {}, activeCookie);
   assert.equal(adminUsage.status, 200);
 
+  const [moderatedPost] = await dbModule.db
+    .insert(dbModule.fallenFanPostsTable)
+    .values({
+      telegramId: TEST_TELEGRAM_ID,
+      author: "Integration Fan",
+      message: "Integration post for admin moderation",
+    })
+    .returning({ id: dbModule.fallenFanPostsTable.id });
+  if (!moderatedPost) assert.fail("Test post was not created");
+
+  const feedBeforeHide = await request("/api/fan-feed");
+  assert.equal(feedBeforeHide.status, 200);
+  assert.ok(
+    (await feedBeforeHide.json() as Array<{ id: number }>)
+      .some(({ id }) => id === moderatedPost.id),
+  );
+
+  const hidden = await request(
+    `/api/fan-feed/${moderatedPost.id}/hide`,
+    { method: "POST" },
+    activeCookie,
+  );
+  assert.equal(hidden.status, 200);
+  assert.deepEqual(await hidden.json(), {
+    id: moderatedPost.id,
+    hidden: true,
+  });
+
+  const feedAfterHide = await request("/api/fan-feed");
+  assert.equal(feedAfterHide.status, 200);
+  assert.equal(
+    (await feedAfterHide.json() as Array<{ id: number }>)
+      .some(({ id }) => id === moderatedPost.id),
+    false,
+  );
+
   const revokeOperationId = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
   const revokeVersion = grantVersion + 1;
   const revoke = await request("/api/admin-roles/sync", {
