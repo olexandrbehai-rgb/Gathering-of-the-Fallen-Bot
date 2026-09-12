@@ -210,6 +210,17 @@ export default function Home() {
           <ContactView onBack={() => navigateTo("home")} />
         )}
       </div>
+      <RainEffect />
+    </div>
+  );
+}
+
+function RainEffect() {
+  return (
+    <div className="rain-overlay" aria-hidden="true">
+      <div className="rain-layer rain-layer-back" />
+      <div className="rain-layer rain-layer-front" />
+      <div className="rain-mist" />
     </div>
   );
 }
@@ -351,8 +362,8 @@ function NavCard({
       <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_35%,_transparent_0%,_rgba(8,6,24,0.35)_80%)]"></div>
 
       <div className="relative z-10 w-full flex flex-col items-center justify-center gap-3">
-        <div className="w-10 h-10 rounded-full border border-primary/50 bg-background/45 backdrop-blur flex items-center justify-center mb-1 group-hover:border-accent/80 group-hover:bg-accent/15 transition-colors">
-          <Icon className="w-4 h-4 text-primary/80 group-hover:text-primary transition-colors" />
+        <div className="nav-card-icon w-10 h-10 rounded-full border border-primary/50 bg-background/45 backdrop-blur flex items-center justify-center mb-1 group-hover:border-accent/80 group-hover:bg-accent/15 transition-colors">
+          <Icon className="w-4 h-4 text-orange-100 transition-colors" />
         </div>
         <span className="font-serif text-[10px] uppercase tracking-[0.15em] font-bold text-foreground/90 group-hover:text-primary-foreground transition-colors text-center">
           {title}
