@@ -4,7 +4,7 @@ services:
     runtime: node
     plan: starter
     region: frankfurt
-    buildCommand: corepack enable && pnpm install --frozen-lockfile && BASE_PATH=/ pnpm --filter @workspace/fallen-mini-app build && pnpm --filter @workspace/api-server build
+    buildCommand: npm install --global pnpm@10.26.1 && pnpm install --frozen-lockfile && BASE_PATH=/ pnpm --filter @workspace/fallen-mini-app build && pnpm --filter @workspace/api-server build
     preDeployCommand: pnpm --filter @workspace/db push
     startCommand: pnpm --filter @workspace/api-server start
     healthCheckPath: /api/healthz
