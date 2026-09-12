@@ -55,7 +55,14 @@ function createInitData(authDate: number): string {
   return params.toString();
 }
 
-function createSessionCookie(expiresAt: number): string {
+function createSignedSessionCookie(payload: string): string {
+  const signature = createHmac("sha256", SESSION_SECRET)
+    .update(payload)
+    .digest("base64url");
+  return `fallen_session=${payload}.${signature}`;
+}
+
+function createSessionCookie(expiresAt: number, overrides: Record<string, unknown> = {}): string {
   const payload = Buffer.from(
     JSON.stringify({
       id: TEST_TELEGRAM_ID,
@@ -64,12 +71,10 @@ function createSessionCookie(expiresAt: number): string {
       avatarUrl: null,
       isAdmin: false,
       expiresAt,
+      ...overrides,
     }),
   ).toString("base64url");
-  const signature = createHmac("sha256", SESSION_SECRET)
-    .update(payload)
-    .digest("base64url");
-  return `fallen_session=${payload}.${signature}`;
+  return createSignedSessionCookie(payload);
 }
 
 async function request(
@@ -167,6 +172,30 @@ test("rejects an expired correctly signed session", async () => {
   const profile = await request("/api/me", {}, expiredCookie);
 
   assert.equal(profile.status, 401);
+});
+
+test("rejects malformed sessions with 401 instead of exposing protected routes", async () => {
+  const validCookie = createSessionCookie(Date.now() + 60_000);
+  const [, validRaw] = validCookie.split("=");
+  if (!validRaw) assert.fail("Test session cookie is missing its value");
+  const [payload, signature] = validRaw.split(".");
+  if (!payload || !signature) assert.fail("Test session cookie is missing its signed parts");
+
+  const malformedCookies = [
+    createSignedSessionCookie("not-base64!?"),
+    createSignedSessionCookie(Buffer.from("{").toString("base64url")),
+    `fallen_session=${payload}.${signature}.extra`,
+    `fallen_session=${payload}`,
+    createSessionCookie(Date.now() + 60_000, { id: "8765432101" }),
+    createSessionCookie(Date.now() + 60_000, { isAdmin: "false" }),
+    createSessionCookie(Date.now() + 60_000, { expiresAt: "never" }),
+  ];
+
+  const responses = await Promise.all(
+    malformedCookies.map((cookie) => request("/api/me", {}, cookie)),
+  );
+
+  assert.deepEqual(responses.map(({ status }) => status), malformedCookies.map(() => 401));
 });
 
 test("keeps profile, subscription, fan wall, and AI available through one same-origin session", async () => {

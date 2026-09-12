@@ -14,6 +14,20 @@ const encode = (value: string) => Buffer.from(value).toString("base64url");
 const sign = (value: string) =>
   createHmac("sha256", process.env.SESSION_SECRET ?? "").update(value).digest("base64url");
 
+function isSessionIdentity(value: unknown): value is SessionIdentity & { expiresAt: number } {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const identity = value as Record<string, unknown>;
+  return (
+    Number.isSafeInteger(identity.id) &&
+    Number(identity.id) > 0 &&
+    typeof identity.displayName === "string" &&
+    typeof identity.username === "string" &&
+    (typeof identity.avatarUrl === "string" || identity.avatarUrl === null) &&
+    typeof identity.isAdmin === "boolean" &&
+    Number.isSafeInteger(identity.expiresAt)
+  );
+}
+
 export function verifyTelegramInitData(initData: string): SessionIdentity {
   const botToken = process.env.TELEGRAM_TOKEN;
   if (!botToken) throw new Error("Telegram authentication is not configured");
@@ -71,24 +85,36 @@ export function setSession(res: Response, identity: SessionIdentity): void {
 }
 
 export function getSession(req: Request): SessionIdentity | null {
-  const raw = req.cookies?.fallen_session as string | undefined;
-  if (raw && process.env.SESSION_SECRET) {
-    const [payload, signature] = raw.split(".");
-    if (payload && signature) {
-      const expected = sign(payload);
-      const left = Buffer.from(expected);
-      const right = Buffer.from(signature);
-      if (left.length === right.length && timingSafeEqual(left, right)) {
-        try {
-          const identity = JSON.parse(
-            Buffer.from(payload, "base64url").toString(),
-          ) as SessionIdentity;
-          if (!identity.expiresAt || identity.expiresAt < Date.now()) return null;
-          return identity;
-        } catch {
-          return null;
-        }
-      }
+  const raw: unknown = req.cookies?.fallen_session;
+  if (raw !== undefined) {
+    if (typeof raw !== "string" || !raw) return null;
+    if (!process.env.SESSION_SECRET) return null;
+
+    const parts = raw.split(".");
+    if (parts.length !== 2) return null;
+    const [payload, signature] = parts;
+    if (
+      !payload ||
+      !signature ||
+      !/^[A-Za-z0-9_-]+$/.test(payload) ||
+      !/^[A-Za-z0-9_-]+$/.test(signature)
+    ) {
+      return null;
+    }
+
+    const expected = sign(payload);
+    const left = Buffer.from(expected);
+    const right = Buffer.from(signature);
+    if (left.length !== right.length || !timingSafeEqual(left, right)) return null;
+
+    try {
+      const decoded = Buffer.from(payload, "base64url").toString();
+      if (encode(decoded) !== payload) return null;
+      const identity: unknown = JSON.parse(decoded);
+      if (!isSessionIdentity(identity) || identity.expiresAt < Date.now()) return null;
+      return identity;
+    } catch {
+      return null;
     }
   }
   if (process.env.NODE_ENV !== "production") {
