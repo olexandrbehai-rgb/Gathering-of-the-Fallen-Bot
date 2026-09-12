@@ -187,3 +187,146 @@
 .nav-card:hover::after {
   opacity: 1;
 }
+
+/* Atmospheric rain that sits above the world but never blocks the UI. */
+.rain-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  overflow: hidden;
+  pointer-events: none;
+  opacity: 0.28;
+  mix-blend-mode: screen;
+}
+
+.rain-layer {
+  position: absolute;
+  inset: -18% -12%;
+  transform: rotate(8deg);
+  background-repeat: repeat;
+  will-change: transform;
+}
+
+.rain-layer-back {
+  background-image: repeating-linear-gradient(
+    105deg,
+    transparent 0 54px,
+    rgba(181, 207, 255, 0.24) 55px,
+    rgba(181, 207, 255, 0.24) 56px,
+    transparent 57px 104px
+  );
+  background-size: 150px 210px;
+  animation: rain-fall-back 1.8s linear infinite;
+}
+
+.rain-layer-front {
+  opacity: 0.75;
+  background-image: repeating-linear-gradient(
+    105deg,
+    transparent 0 28px,
+    rgba(224, 235, 255, 0.34) 29px,
+    rgba(224, 235, 255, 0.34) 30px,
+    transparent 31px 74px
+  );
+  background-size: 94px 144px;
+  animation: rain-fall-front 1.05s linear infinite;
+}
+
+.rain-mist {
+  position: absolute;
+  inset: auto -10% -8% -10%;
+  height: 30%;
+  opacity: 0.45;
+  background: linear-gradient(to top, rgba(97, 84, 171, 0.16), transparent 75%);
+  filter: blur(18px);
+}
+
+.nav-card-icon {
+  position: relative;
+  border-color: rgba(255, 190, 116, 0.66);
+  box-shadow:
+    0 0 8px rgba(255, 111, 43, 0.42),
+    0 0 22px rgba(248, 129, 55, 0.24),
+    inset 0 0 12px rgba(255, 166, 74, 0.16);
+  animation: fire-flicker 1.8s ease-in-out infinite;
+}
+
+.nav-card-icon::before {
+  content: "";
+  position: absolute;
+  inset: -7px;
+  z-index: -1;
+  border-radius: 999px;
+  background: radial-gradient(
+    ellipse at center bottom,
+    rgba(255, 174, 76, 0.55) 0%,
+    rgba(255, 92, 34, 0.22) 38%,
+    transparent 72%
+  );
+  filter: blur(5px);
+  animation: flame-aura 1.35s ease-in-out infinite alternate;
+}
+
+.nav-card-icon svg {
+  color: #ffdba7;
+  filter: drop-shadow(0 0 4px rgba(255, 202, 117, 0.95))
+    drop-shadow(0 0 9px rgba(255, 91, 35, 0.7));
+}
+
+@keyframes rain-fall-back {
+  from {
+    transform: translate3d(-2%, -10%, 0) rotate(8deg);
+  }
+  to {
+    transform: translate3d(3%, 12%, 0) rotate(8deg);
+  }
+}
+
+@keyframes rain-fall-front {
+  from {
+    transform: translate3d(3%, -12%, 0) rotate(8deg);
+  }
+  to {
+    transform: translate3d(-4%, 15%, 0) rotate(8deg);
+  }
+}
+
+@keyframes fire-flicker {
+  0%,
+  100% {
+    transform: scale(1);
+    box-shadow:
+      0 0 8px rgba(255, 111, 43, 0.42),
+      0 0 22px rgba(248, 129, 55, 0.24),
+      inset 0 0 12px rgba(255, 166, 74, 0.16);
+  }
+  35% {
+    transform: scale(1.06) rotate(-1deg);
+    box-shadow:
+      0 0 11px rgba(255, 142, 54, 0.62),
+      0 0 29px rgba(248, 129, 55, 0.34),
+      inset 0 0 15px rgba(255, 194, 92, 0.24);
+  }
+  68% {
+    transform: scale(0.98) rotate(1deg);
+  }
+}
+
+@keyframes flame-aura {
+  from {
+    transform: scale(0.82, 0.9);
+    opacity: 0.62;
+  }
+  to {
+    transform: scale(1.2, 1.08);
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rain-layer,
+  .nav-card-icon,
+  .nav-card-icon::before {
+    animation: none;
+  }
+}
