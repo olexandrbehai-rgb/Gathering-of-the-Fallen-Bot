@@ -1,0 +1,71 @@
+==> Cloning from https://github.com/olexandrbehai-rgb/Gathering-of-the-Fallen-Bot
+==> Checking out commit ffe2013f5bcb9fbfb4d6ca63178ecbe9557a0f02 in branch main
+==> Using Node.js version 22.14.0 via environment variable NODE_VERSION
+==> Docs on specifying a Node.js version: https://render.com/docs/node-version
+==> Installing Node.js version 22.14.0...
+==> Running build command 'npm install --global pnpm@10.26.1 && pnpm install --frozen-lockfile && BASE_PATH=/ pnpm --filter @workspace/fallen-mini-app build && pnpm --filter @workspace/api-server build'...
+added 1 package in 818ms
+1 package is looking for funding
+  run `npm fund` for details
+> @workspace/fallen-mini-app@0.0.0 build /opt/render/project/src/artifacts/fallen-mini-app
+> vite build --config vite.config.ts
+vite v7.3.3 building client environment for production...
+transforming...
+src/components/ui/tooltip.tsx (2:0): Error when using sourcemap for reporting an error: Can't resolve original location of error.
+✓ 1780 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/public/index.html                   1.61 kB │ gzip:   0.67 kB
+dist/public/assets/index-ThvNoUdT.css  106.85 kB │ gzip:  17.21 kB
+dist/public/assets/index-Bi_jBEPf.js   359.06 kB │ gzip: 114.77 kB
+✓ built in 2.88s
+> @workspace/api-server@0.0.0 build /opt/render/project/src/artifacts/api-server
+> node ./build.mjs
+  dist/index.mjs                       2.2mb ⚠️
+  dist/pino-worker.mjs               153.4kb
+  dist/pino-file.mjs                 142.1kb
+  dist/pino-pretty.mjs               114.6kb
+  dist/thread-stream-worker.mjs        7.3kb
+  dist/index.mjs.map                   3.8mb
+  dist/pino-worker.mjs.map           256.9kb
+  dist/pino-file.mjs.map             229.0kb
+  dist/pino-pretty.mjs.map           204.0kb
+  dist/thread-stream-worker.mjs.map   12.0kb
+⚡ Done in 501ms
+==> Uploading build...
+==> Uploaded in 3.7s. Compression took 2.8s
+==> Build successful 🎉
+==> Starting pre-deploy: pnpm --filter @workspace/db push
+==> Running 'pnpm --filter @workspace/db push'
+> @workspace/db@0.0.0 push /opt/render/project/src/lib/db
+> drizzle-kit push --config ./drizzle.config.ts
+Reading config file '/opt/render/project/src/lib/db/drizzle.config.ts'
+Using 'pg' driver for database querying
+[⣷] Pulling schema from database...
+[⣯] Pulling schema from database...
+[⣟] Pulling schema from database...
+[⡿] Pulling schema from database...
+[⢿] Pulling schema from database...
+[⣻] Pulling schema from database...
+[⣽] Pulling schema from database...
+[⣷] Pulling schema from database...
+[✓] Pulling schema from database...
+[i] No changes detected
+==> Pre-deploy complete!
+==> Deploying...
+==> Setting WEB_CONCURRENCY=1 by default, based on available CPUs in the instance
+==> Running 'pnpm --filter @workspace/api-server start'
+> @workspace/api-server@0.0.0 start /opt/render/project/src/artifacts/api-server
+> node --enable-source-maps ./dist/index.mjs
+{"level":30,"time":1789188388368,"pid":64,"hostname":"srv-daida9vqj5pc739kki6g-54c5946677-pkf9q","port":10000,"msg":"Server listening"}
+{"level":30,"time":1789188389931,"pid":64,"hostname":"srv-daida9vqj5pc739kki6g-54c5946677-pkf9q","req":{"id":1,"method":"GET","url":"/api/healthz"},"res":{"statusCode":200},"responseTime":28,"msg":"request completed"}
+{"level":30,"time":1789188390914,"pid":64,"hostname":"srv-daida9vqj5pc739kki6g-54c5946677-pkf9q","req":{"id":2,"method":"GET","url":"/api/healthz"},"res":{"statusCode":200},"responseTime":3,"msg":"request completed"}
+==> Your service is live 🎉
+==> 
+==> ///////////////////////////////////////////////////////////
+==> 
+==> Available at your primary URL https://gathering-of-the-fallen-mini-app.onrender.com
+==> 
+==> ///////////////////////////////////////////////////////////
+{"level":30,"time":1789188391176,"pid":64,"hostname":"srv-daida9vqj5pc739kki6g-54c5946677-pkf9q","req":{"id":3,"method":"HEAD","url":"/"},"res":{"statusCode":200},"responseTime":3,"msg":"request completed"}
+Nee
