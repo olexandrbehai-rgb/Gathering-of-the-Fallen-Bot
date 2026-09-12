@@ -205,6 +205,8 @@ class BotCoreTests(unittest.TestCase):
                 mime_type="audio/ogg",
             ),
             audio=None,
+            text=None,
+            caption=None,
             chat=SimpleNamespace(id=101, send_action=AsyncMock()),
             reply_text=AsyncMock(),
         )
@@ -218,10 +220,12 @@ class BotCoreTests(unittest.TestCase):
             ),
             effective_chat=SimpleNamespace(id=101),
             effective_message=message,
+            message=message,
         )
         context = SimpleNamespace(
             bot=SimpleNamespace(
                 get_file=AsyncMock(return_value=tg_file),
+                send_message=AsyncMock(),
             )
         )
         original_ai_reply = main.ai_reply
