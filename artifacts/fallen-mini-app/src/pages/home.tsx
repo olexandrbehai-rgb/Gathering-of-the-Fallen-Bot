@@ -466,9 +466,19 @@ function CovenTab() {
   const [msg, setMsg] = useState('');
   const [feedback, setFeedback] = useState('');
 
-  const errorMessage = (error: unknown) => {
-    const apiError = error as { data?: { error?: string } };
-    return apiError.data?.error ?? 'Не вдалося виконати дію. Спробуйте ще раз.';
+  const errorMessage = (error: unknown): string => {
+    if (typeof error !== 'object' || error === null || !('data' in error)) {
+      return 'Не вдалося виконати дію. Спробуйте ще раз.';
+    }
+
+    const data = error.data;
+    if (typeof data !== 'object' || data === null || !('error' in data)) {
+      return 'Не вдалося виконати дію. Спробуйте ще раз.';
+    }
+
+    return typeof data.error === 'string' && data.error.length > 0
+      ? data.error
+      : 'Не вдалося виконати дію. Спробуйте ще раз.';
   };
 
   const handlePost = () => {
