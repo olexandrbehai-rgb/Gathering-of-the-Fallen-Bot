@@ -50,6 +50,14 @@ import navCoven from "@assets/generated_images/nav-coven.jpg";
 
 type View = "home" | "music" | "videos" | "oracle" | "coven";
 
+const views: View[] = ["home", "music", "videos", "oracle", "coven"];
+
+function viewFromHash(): View {
+  if (typeof window === "undefined") return "home";
+  const hash = window.location.hash.slice(1) as View;
+  return views.includes(hash) ? hash : "home";
+}
+
 // Utility to clean emojis from text as requested
 const cleanText = (text: string) => {
   return text
@@ -61,8 +69,52 @@ const cleanText = (text: string) => {
 };
 
 export default function Home() {
-  const [activeView, setActiveView] = useState<View>("home");
+  const [activeView, setActiveView] = useState<View>(viewFromHash);
   const { identity, isLoading, authError, retryTelegramAuth } = useAuth();
+
+  const navigateTo = (view: View) => {
+    if (view === activeView) return;
+
+    if (view === "home") {
+      const cleanUrl = `${window.location.pathname}${window.location.search}`;
+      window.history.replaceState({ view }, "", cleanUrl);
+    } else {
+      const nextUrl = `${window.location.pathname}${window.location.search}#${view}`;
+      window.history.pushState({ view }, "", nextUrl);
+    }
+
+    setActiveView(view);
+  };
+
+  useEffect(() => {
+    const handleNavigation = () => setActiveView(viewFromHash());
+    window.addEventListener("popstate", handleNavigation);
+    window.addEventListener("hashchange", handleNavigation);
+
+    return () => {
+      window.removeEventListener("popstate", handleNavigation);
+      window.removeEventListener("hashchange", handleNavigation);
+    };
+  }, []);
+
+  useEffect(() => {
+    // @ts-ignore Telegram injects WebApp and BackButton into window.
+    const backButton = window.Telegram?.WebApp?.BackButton;
+    if (!backButton) return;
+
+    const handleTelegramBack = () => navigateTo("home");
+    if (activeView === "home") {
+      backButton.hide?.();
+    } else {
+      backButton.show?.();
+      backButton.onClick?.(handleTelegramBack);
+    }
+
+    return () => {
+      backButton.offClick?.(handleTelegramBack);
+      backButton.hide?.();
+    };
+  }, [activeView]);
 
   if (isLoading) {
     return (
@@ -117,18 +169,18 @@ export default function Home() {
     <div className="flex flex-col min-h-[100dvh] w-full bg-background relative selection:bg-primary/30">
       {/* View Router */}
       <div className="flex-1 flex flex-col w-full h-full relative">
-        {activeView === "home" && <HomeView onNavigate={setActiveView} />}
+        {activeView === "home" && <HomeView onNavigate={navigateTo} />}
         {activeView === "music" && (
-          <MusicView onBack={() => setActiveView("home")} />
+          <MusicView onBack={() => navigateTo("home")} />
         )}
         {activeView === "videos" && (
-          <VideosView onBack={() => setActiveView("home")} />
+          <VideosView onBack={() => navigateTo("home")} />
         )}
         {activeView === "oracle" && (
-          <OracleView onBack={() => setActiveView("home")} />
+          <OracleView onBack={() => navigateTo("home")} />
         )}
         {activeView === "coven" && (
-          <CovenView onBack={() => setActiveView("home")} />
+          <CovenView onBack={() => navigateTo("home")} />
         )}
       </div>
     </div>
@@ -310,16 +362,21 @@ function SubscriptionToggle() {
 // ==========================================
 function ViewHeader({ title, onBack }: { title: string; onBack: () => void }) {
   return (
-    <div className="sticky top-0 z-40 bg-background/90 backdrop-blur-lg border-b border-border/40 px-4 h-16 flex items-center justify-between w-full">
+    <div className="sticky top-16 mt-16 z-40 bg-background/95 backdrop-blur-lg border-b border-border/40 px-4 h-16 flex items-center justify-between w-full">
       <button
+        type="button"
         onClick={onBack}
-        className="w-10 h-10 flex items-center justify-center rounded-full bg-secondary/50 border border-border/50 hover:bg-secondary hover:border-primary/50 transition-colors text-muted-foreground hover:text-primary shrink-0"
+        aria-label="Назад на головний екран"
+        data-testid="button-back-home"
+        className="flex h-10 items-center gap-1.5 rounded-full bg-secondary/70 border border-primary/25 px-3 text-xs font-semibold uppercase tracking-wider text-foreground/80 hover:bg-primary/15 hover:border-primary/60 hover:text-primary transition-colors shrink-0"
       >
         <ChevronLeft className="w-5 h-5" />
+        <span>Назад</span>
       </button>
-      <h2 className="font-serif text-sm uppercase tracking-[0.25em] font-bold text-foreground text-center flex-1 pr-10">
+      <h2 className="font-serif text-sm uppercase tracking-[0.25em] font-bold text-foreground text-center flex-1">
         {title}
       </h2>
+      <div className="w-[76px]" aria-hidden="true" />
     </div>
   );
 }
@@ -364,38 +421,49 @@ function MusicView({ onBack }: { onBack: () => void }) {
       <ViewHeader title="Музика й архіви" onBack={onBack} />
 
       <div className="p-5 space-y-12 mt-2">
-        {/* Featured Release / Track */}
+        {/* Releases */}
         {isExpLoading || isReleasesLoading ? (
           <LoadingState />
         ) : (
           <>
             {releases && releases.length > 0 && (
               <section>
-                <SectionTitle>Остання маніфестація</SectionTitle>
-                <a
-                  href={releases[0].url}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="block relative overflow-hidden rounded-xl border border-primary/20 bg-secondary/30 group transition-all hover:border-primary/50"
-                >
-                  <div className="absolute inset-0 bg-gradient-to-br from-primary/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity"></div>
-                  <div className="p-6">
-                    <div className="w-12 h-12 rounded-full bg-primary/20 flex items-center justify-center mb-4 text-primary group-hover:scale-110 transition-transform">
-                      <Play className="w-5 h-5 ml-1" />
-                    </div>
-                    <div className="text-[10px] text-primary/70 font-mono uppercase tracking-wider mb-2">
-                      {new Date(releases[0].date).toLocaleDateString("uk-UA", {
-                        year: "numeric",
-                      })}
-                    </div>
-                    <h3 className="font-serif text-2xl font-bold text-foreground mb-2 leading-tight">
-                      {releases[0].title}
-                    </h3>
-                    <p className="text-sm text-muted-foreground line-clamp-2">
-                      {releases[0].description}
-                    </p>
-                  </div>
-                </a>
+                <SectionTitle>Релізи</SectionTitle>
+                <div className="grid gap-3">
+                  {releases.map((release) => (
+                    <a
+                      key={release.id}
+                      href={release.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      data-testid={`link-release-${release.id}`}
+                      className="group relative overflow-hidden rounded-2xl border border-primary/25 bg-secondary/45 p-5 transition-all hover:-translate-y-0.5 hover:border-accent/70 hover:bg-secondary/70"
+                    >
+                      <div className="absolute inset-0 bg-gradient-to-r from-primary/15 via-transparent to-accent/10 opacity-60 transition-opacity group-hover:opacity-100" />
+                      <div className="relative flex items-start gap-4">
+                        <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-primary/35 bg-primary/15 text-primary group-hover:bg-primary group-hover:text-primary-foreground transition-colors">
+                          <Play className="w-4 h-4 ml-0.5" />
+                        </div>
+                        <div className="min-w-0">
+                          <div className="mb-1 text-[10px] font-mono uppercase tracking-wider text-accent">
+                            {new Date(release.date).toLocaleDateString(
+                              "uk-UA",
+                              {
+                                year: "numeric",
+                              },
+                            )}
+                          </div>
+                          <h3 className="font-serif text-lg font-bold leading-tight text-foreground group-hover:text-primary transition-colors">
+                            {release.title}
+                          </h3>
+                          <p className="mt-1 text-sm leading-relaxed text-muted-foreground line-clamp-2">
+                            {release.description}
+                          </p>
+                        </div>
+                      </div>
+                    </a>
+                  ))}
+                </div>
               </section>
             )}
 
@@ -590,7 +658,7 @@ function OracleView({ onBack }: { onBack: () => void }) {
     {
       id: "welcome",
       role: "oracle",
-      text: "Speak your truth into the void. I am the Oracle of the Fallen. Ask me of the lore, the sound, or the meaning.",
+      text: "Скажіть свою правду порожнечі. Я — Оракул Полеглих. Питайте про лор, звучання або сенс.",
     },
   ]);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -663,7 +731,7 @@ function OracleView({ onBack }: { onBack: () => void }) {
             )}
           >
             <span className="text-[9px] text-muted-foreground/60 uppercase tracking-[0.2em] mb-2 px-2">
-              {msg.role === "user" ? "You" : "Oracle"}
+              {msg.role === "user" ? "Ви" : "Оракул"}
             </span>
             <div
               className={cn(
@@ -726,11 +794,11 @@ function CovenView({ onBack }: { onBack: () => void }) {
 
   const errorMessage = (error: unknown): string => {
     if (typeof error !== "object" || error === null || !("data" in error))
-      return "Failed to manifest. Try again.";
+      return "Не вдалося опублікувати допис. Спробуйте ще раз.";
     const data = error.data as any;
     return typeof data?.error === "string" && data.error.length > 0
       ? data.error
-      : "Failed to manifest. Try again.";
+      : "Не вдалося опублікувати допис. Спробуйте ще раз.";
   };
 
   const handlePost = () => {
@@ -740,7 +808,7 @@ function CovenView({ onBack }: { onBack: () => void }) {
       {
         onSuccess: () => {
           setMsg("");
-          setFeedback("Your mark has been left.");
+          setFeedback("Ваш допис опубліковано.");
           refetch();
         },
         onError: (error) => setFeedback(errorMessage(error)),
@@ -753,7 +821,7 @@ function CovenView({ onBack }: { onBack: () => void }) {
       { id },
       {
         onSuccess: () => {
-          setFeedback("Post banished.");
+          setFeedback("Допис приховано.");
           refetch();
         },
         onError: (error) => setFeedback(errorMessage(error)),
@@ -770,7 +838,7 @@ function CovenView({ onBack }: { onBack: () => void }) {
         <div className="bg-secondary/30 border border-primary/20 rounded-2xl p-5 relative overflow-hidden group">
           <div className="absolute inset-0 bg-gradient-to-br from-primary/5 to-transparent pointer-events-none"></div>
           <h3 className="font-serif text-sm uppercase tracking-[0.2em] font-bold mb-4 flex items-center gap-3 text-primary/90">
-            <Flame className="w-4 h-4" /> Leave your mark
+            <Flame className="w-4 h-4" /> Залишити свій слід
           </h3>
           <Textarea
             placeholder="Що відлунює у ваших думках?"
@@ -804,7 +872,7 @@ function CovenView({ onBack }: { onBack: () => void }) {
             <LoadingState />
           ) : posts?.length === 0 ? (
             <div className="text-center py-16 text-muted-foreground/60 text-sm font-serif border border-dashed border-border/40 rounded-2xl">
-              The coven is silent. Speak first.
+              Ковен мовчить. Заговоріть першим.
             </div>
           ) : (
             posts?.map((post, i) => (
@@ -822,7 +890,7 @@ function CovenView({ onBack }: { onBack: () => void }) {
                         {post.author}
                       </span>
                       <span className="text-[9px] text-muted-foreground/60 font-mono uppercase tracking-widest">
-                        {new Date(post.createdAt).toLocaleDateString("en-US", {
+                        {new Date(post.createdAt).toLocaleDateString("uk-UA", {
                           day: "numeric",
                           month: "short",
                           year: "numeric",
