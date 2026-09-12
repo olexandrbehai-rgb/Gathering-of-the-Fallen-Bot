@@ -43,6 +43,11 @@ import { getGetMeQueryKey } from "@workspace/api-client-react";
 
 // Use the user's original reference artwork unchanged.
 import heroBg from "@assets/6b23015f-0f7b-4e54-b5d6-fbd286150615_1789191789114.png";
+import musicCardArt from "@assets/generated_images/fallen-card-music.jpg";
+import videoCardArt from "@assets/generated_images/fallen-card-video.jpg";
+import aboutCardArt from "@assets/generated_images/fallen-card-about.jpg";
+import galleryCardArt from "@assets/generated_images/fallen-card-gallery.jpg";
+import contactCardArt from "@assets/generated_images/fallen-card-contact.jpg";
 
 type View =
   | "home"
@@ -248,16 +253,19 @@ function HomeView({ onNavigate }: { onNavigate: (view: View) => void }) {
         <div className="grid grid-cols-3 gap-3">
           <NavCard
             title="МУЗИКА"
+            image={musicCardArt}
             icon={Disc}
             onClick={() => onNavigate("music")}
           />
           <NavCard
             title="ВІДЕО"
+            image={videoCardArt}
             icon={Tv}
             onClick={() => onNavigate("videos")}
           />
           <NavCard
             title="ПРО ГУРТ"
+            image={aboutCardArt}
             icon={Users}
             onClick={() => onNavigate("about")}
           />
@@ -265,11 +273,13 @@ function HomeView({ onNavigate }: { onNavigate: (view: View) => void }) {
         <div className="grid grid-cols-2 gap-3">
           <NavCard
             title="ГАЛЕРЕЯ"
+            image={galleryCardArt}
             icon={Film}
             onClick={() => onNavigate("gallery")}
           />
           <NavCard
             title="КОНТАКТИ"
+            image={contactCardArt}
             icon={MessageSquare}
             onClick={() => onNavigate("contact")}
           />
@@ -315,10 +325,12 @@ function HomeView({ onNavigate }: { onNavigate: (view: View) => void }) {
 
 function NavCard({
   title,
+  image,
   icon: Icon,
   onClick,
 }: {
   title: string;
+  image: string;
   icon: any;
   onClick: () => void;
 }) {
@@ -329,10 +341,17 @@ function NavCard({
       data-testid={`button-open-${title.toLowerCase().replaceAll(" ", "-")}`}
       className="nav-card group aspect-[1/1.05] flex flex-col items-center justify-end p-3 text-left w-full relative"
     >
-      <div className="absolute inset-0 bg-gradient-to-t from-background via-background/40 to-transparent"></div>
+      <img
+        src={image}
+        alt=""
+        aria-hidden="true"
+        className="absolute inset-0 h-full w-full object-cover opacity-90 saturate-[0.85] transition duration-700 group-hover:scale-105 group-hover:opacity-100"
+      />
+      <div className="absolute inset-0 bg-gradient-to-t from-background via-background/35 to-background/5"></div>
+      <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_35%,_transparent_0%,_rgba(8,6,24,0.35)_80%)]"></div>
 
       <div className="relative z-10 w-full flex flex-col items-center justify-center gap-3">
-        <div className="w-10 h-10 rounded-full border border-primary/30 bg-primary/10 backdrop-blur flex items-center justify-center mb-1 group-hover:border-accent/70 group-hover:bg-accent/15 transition-colors">
+        <div className="w-10 h-10 rounded-full border border-primary/50 bg-background/45 backdrop-blur flex items-center justify-center mb-1 group-hover:border-accent/80 group-hover:bg-accent/15 transition-colors">
           <Icon className="w-4 h-4 text-primary/80 group-hover:text-primary transition-colors" />
         </div>
         <span className="font-serif text-[10px] uppercase tracking-[0.15em] font-bold text-foreground/90 group-hover:text-primary-foreground transition-colors text-center">
