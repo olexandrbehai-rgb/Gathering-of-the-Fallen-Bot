@@ -10,6 +10,8 @@ interface AuthContextType {
   identity: FanIdentity | null;
   isLoading: boolean;
   isPreview: boolean;
+  authError: 'missing-init-data' | 'rejected' | null;
+  retryTelegramAuth: () => void;
   refetchIdentity: () => void;
 }
 
@@ -17,6 +19,8 @@ const AuthContext = createContext<AuthContextType>({
   identity: null, 
   isLoading: true, 
   isPreview: false,
+  authError: null,
+  retryTelegramAuth: () => {},
   refetchIdentity: () => {}
 });
 
@@ -24,6 +28,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [identity, setIdentity] = useState<FanIdentity | null>(null);
   const [isPreview, setIsPreview] = useState(false);
   const [isInitializing, setIsInitializing] = useState(true);
+  const [authError, setAuthError] = useState<AuthContextType['authError']>(null);
   
   const { data: me, isLoading: isMeLoading, refetch: refetchMe } = useGetMe({
     query: {
@@ -43,23 +48,34 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     
     if (!isMeLoading && !me && !identity && isInitializing) {
       // @ts-ignore
-      const initData = window.Telegram?.WebApp?.initData;
-      
-      if (initData) {
-        authMutation.mutate({ data: { initData } }, {
-          onSuccess: (data) => {
-            setIdentity(data);
-            setIsInitializing(false);
-          },
-          onError: () => {
-             finishWithoutTelegram();
-          }
-        });
-      } else {
-        finishWithoutTelegram();
-      }
+      authenticateWithTelegram();
     }
   }, [me, isMeLoading, isInitializing]);
+
+  const getTelegramInitData = () => {
+    // @ts-ignore Telegram injects WebApp into window inside the Mini App.
+    return window.Telegram?.WebApp?.initData as string | undefined;
+  };
+
+  const authenticateWithTelegram = () => {
+    const initData = getTelegramInitData();
+
+    if (!initData) {
+      finishWithoutTelegram('missing-init-data');
+      return;
+    }
+
+    setAuthError(null);
+    authMutation.mutate({ data: { initData } }, {
+      onSuccess: (data) => {
+        setIdentity(data);
+        setIsInitializing(false);
+      },
+      onError: () => {
+        finishWithoutTelegram('rejected');
+      }
+    });
+  };
 
   const enablePreviewFallback = () => {
     setIsPreview(true);
@@ -73,13 +89,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setIsInitializing(false);
   };
 
-  const finishWithoutTelegram = () => {
+  const finishWithoutTelegram = (error: NonNullable<AuthContextType['authError']>) => {
     if (import.meta.env.DEV) {
       enablePreviewFallback();
       return;
     }
     setIdentity(null);
+    setAuthError(error);
     setIsInitializing(false);
+  };
+
+  const retryTelegramAuth = () => {
+    if (authMutation.isPending) return;
+    authenticateWithTelegram();
   };
 
   const handleRefetch = () => {
@@ -92,6 +114,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       identity, 
       isLoading: isMeLoading || authMutation.isPending || isInitializing, 
       isPreview,
+      authError,
+      retryTelegramAuth,
       refetchIdentity: handleRefetch
     }}>
       {children}

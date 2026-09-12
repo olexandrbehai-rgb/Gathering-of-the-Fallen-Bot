@@ -11,7 +11,7 @@ import {
   useListVideos
 } from '@workspace/api-client-react';
 import { useAuth } from '@/lib/auth';
-import { Play, MessageSquare, Users, Loader2, Send, Flame, Skull, Music2, Bell, BellOff, ArrowRight, Film, Headphones, Search, X, EyeOff } from 'lucide-react';
+import { Play, MessageSquare, Users, Loader2, Send, Flame, Skull, Music2, Bell, BellOff, ArrowRight, Film, Headphones, Search, X, EyeOff, RefreshCw, LogOut } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
@@ -23,7 +23,7 @@ type Tab = 'sanctuary' | 'oracle' | 'coven';
 
 export default function Home() {
   const [activeTab, setActiveTab] = useState<Tab>('sanctuary');
-  const { identity, isLoading } = useAuth();
+  const { identity, isLoading, authError, retryTelegramAuth } = useAuth();
 
   if (isLoading) {
     return (
@@ -34,13 +34,37 @@ export default function Home() {
   }
 
   if (!identity && !import.meta.env.DEV) {
+    const initDataWasRejected = authError === 'rejected';
+
     return (
       <div className="flex-1 flex flex-col items-center justify-center px-8 text-center">
         <Skull className="w-12 h-12 text-primary mb-5" />
-        <h1 className="font-serif text-2xl font-bold tracking-widest mb-3">ВІДКРИЙТЕ У TELEGRAM</h1>
-        <p className="text-sm text-muted-foreground leading-relaxed">
-          Цей простір перевіряє ваш профіль через Telegram. Поверніться до бота й натисніть кнопку Mini App.
+        <h1 className="font-serif text-2xl font-bold tracking-widest mb-3">
+          {initDataWasRejected ? 'НЕ ВДАЛОСЯ УВІЙТИ' : 'ВІДКРИЙТЕ У TELEGRAM'}
+        </h1>
+        <p className="text-sm text-muted-foreground leading-relaxed max-w-xs">
+          {initDataWasRejected
+            ? 'Telegram не підтвердив ваші дані входу. Спробуйте ще раз. Якщо помилка повториться, закрийте Mini App і відкрийте його заново з бота.'
+            : 'Mini App не отримав дані входу від Telegram. Закрийте його, поверніться до бота й натисніть кнопку Mini App ще раз.'}
         </p>
+        <div className="mt-6 flex w-full max-w-xs flex-col gap-3">
+          {initDataWasRejected && (
+            <Button onClick={retryTelegramAuth}>
+              <RefreshCw className="w-4 h-4" />
+              Спробувати ще раз
+            </Button>
+          )}
+          <Button
+            variant={initDataWasRejected ? 'outline' : 'default'}
+            onClick={() => {
+              // @ts-ignore Telegram injects WebApp into window inside the Mini App.
+              window.Telegram?.WebApp?.close();
+            }}
+          >
+            <LogOut className="w-4 h-4" />
+            Закрити Mini App
+          </Button>
+        </div>
       </div>
     );
   }
