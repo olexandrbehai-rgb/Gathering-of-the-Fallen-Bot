@@ -225,6 +225,43 @@ class BotCoreTests(unittest.TestCase):
         self.assertIn("За останні 7 днів: 1", text)
         self.assertIn("Голос увімкнули: 1", text)
 
+    def test_owner_can_manage_admins_and_owner_cannot_be_removed(self) -> None:
+        original_admin = main.ADMIN_CHAT_ID
+        main.ADMIN_CHAT_ID = 999
+        try:
+            main.init_database()
+            self.assertTrue(main.is_owner_id(999))
+            self.assertTrue(main.grant_admin(101, 999))
+            self.assertTrue(main.is_admin_id(101))
+            self.assertFalse(main.grant_admin(101, 999))
+            self.assertFalse(main.revoke_admin(999, 999))
+            self.assertTrue(main.revoke_admin(101, 999))
+            self.assertFalse(main.is_admin_id(101))
+            actions = [row["action"] for row in main.load_admin_audit()]
+            self.assertIn("grant_admin", actions)
+            self.assertIn("revoke_admin", actions)
+        finally:
+            main.ADMIN_CHAT_ID = original_admin
+
+    def test_activity_and_user_overview_capture_interest_without_text_body(self) -> None:
+        update = SimpleNamespace(
+            effective_user=SimpleNamespace(
+                id=101,
+                username="fan",
+                first_name="Fan",
+                language_code="uk",
+            ),
+            effective_chat=SimpleNamespace(id=101),
+        )
+        main.touch_user(update)
+        main.record_activity(101, "search", "Гори")
+        main.add_subscription(101, "fan")
+        overview = main.get_user_overview(101)
+        self.assertIsNotNone(overview)
+        self.assertEqual(overview["subscribed"], 1)
+        self.assertTrue(any(item["event_type"] == "search" for item in overview["recent"]))
+        self.assertNotIn("content", overview)
+
     def test_tts_opus_is_sent_as_telegram_voice(self) -> None:
         main.set_voice_replies(101, True)
         response = Mock()

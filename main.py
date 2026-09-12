@@ -631,6 +631,27 @@ def init_database() -> None:
                 reply_count INTEGER NOT NULL DEFAULT 0,
                 PRIMARY KEY(chat_id, usage_date)
             );
+            CREATE TABLE IF NOT EXISTS bot_admins (
+                user_id INTEGER PRIMARY KEY,
+                role TEXT NOT NULL CHECK(role IN ('owner', 'admin')),
+                granted_by INTEGER,
+                granted_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS activity_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chat_id INTEGER,
+                event_type TEXT NOT NULL,
+                detail TEXT,
+                created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS admin_audit (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                actor_id INTEGER NOT NULL,
+                action TEXT NOT NULL,
+                target_id INTEGER,
+                detail TEXT,
+                created_at TEXT NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS metadata (
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
@@ -639,8 +660,21 @@ def init_database() -> None:
                 ON fan_messages(is_hidden, id);
             CREATE INDEX IF NOT EXISTS idx_conversation_chat
                 ON conversation_messages(chat_id, id);
+            CREATE INDEX IF NOT EXISTS idx_activity_events_created
+                ON activity_events(id DESC);
+            CREATE INDEX IF NOT EXISTS idx_activity_events_chat
+                ON activity_events(chat_id, id DESC);
+            CREATE INDEX IF NOT EXISTS idx_admin_audit_created
+                ON admin_audit(id DESC);
             """
         )
+        if ADMIN_CHAT_ID:
+            conn.execute(
+                """INSERT INTO bot_admins(user_id, role, granted_by, granted_at)
+                   VALUES (?, 'owner', ?, ?)
+                   ON CONFLICT(user_id) DO UPDATE SET role='owner'""",
+                (ADMIN_CHAT_ID, ADMIN_CHAT_ID, _now_iso()),
+            )
 
         # Міграція старого MVP-сховища. INSERT OR IGNORE робить її безпечною.
         migration_done = conn.execute(
@@ -718,6 +752,9 @@ def touch_user(update: Update) -> None:
         return
     now = _now_iso()
     with _lock, _db() as conn:
+        is_new = conn.execute(
+            "SELECT 1 FROM users WHERE chat_id=?", (chat.id,)
+        ).fetchone() is None
         conn.execute(
             """INSERT INTO users
                (chat_id, username, first_name, language_code, created_at, last_seen_at)
@@ -737,6 +774,167 @@ def touch_user(update: Update) -> None:
             ),
         )
         conn.commit()
+    record_activity(
+        chat.id,
+        "first_seen" if is_new else "visit",
+        user.username or user.first_name or None,
+    )
+
+
+def record_activity(chat_id: int | None, event_type: str, detail: str | None = None) -> None:
+    """Append-only operational metadata; message bodies are not copied here."""
+    with _lock, _db() as conn:
+        conn.execute(
+            """INSERT INTO activity_events(chat_id, event_type, detail, created_at)
+               VALUES (?, ?, ?, ?)""",
+            (chat_id, event_type[:60], (detail or "")[:500] or None, _now_iso()),
+        )
+        conn.execute(
+            """DELETE FROM activity_events WHERE id NOT IN
+               (SELECT id FROM activity_events ORDER BY id DESC LIMIT 10000)"""
+        )
+        conn.commit()
+
+
+def record_admin_audit(
+    actor_id: int, action: str, target_id: int | None = None, detail: str | None = None
+) -> None:
+    with _lock, _db() as conn:
+        conn.execute(
+            """INSERT INTO admin_audit(actor_id, action, target_id, detail, created_at)
+               VALUES (?, ?, ?, ?, ?)""",
+            (actor_id, action[:80], target_id, (detail or "")[:500] or None, _now_iso()),
+        )
+        conn.commit()
+
+
+def is_owner_id(user_id: int | None) -> bool:
+    if not user_id:
+        return False
+    if ADMIN_CHAT_ID and user_id == ADMIN_CHAT_ID:
+        return True
+    with _db() as conn:
+        row = conn.execute(
+            "SELECT role FROM bot_admins WHERE user_id=?", (user_id,)
+        ).fetchone()
+    return bool(row and row["role"] == "owner")
+
+
+def is_admin_id(user_id: int | None) -> bool:
+    if not user_id:
+        return False
+    if is_owner_id(user_id):
+        return True
+    with _db() as conn:
+        return conn.execute(
+            "SELECT 1 FROM bot_admins WHERE user_id=? AND role='admin'", (user_id,)
+        ).fetchone() is not None
+
+
+def grant_admin(user_id: int, granted_by: int) -> bool:
+    with _lock, _db() as conn:
+        exists = conn.execute(
+            "SELECT 1 FROM bot_admins WHERE user_id=?", (user_id,)
+        ).fetchone()
+        conn.execute(
+            """INSERT INTO bot_admins(user_id, role, granted_by, granted_at)
+               VALUES (?, 'admin', ?, ?)
+               ON CONFLICT(user_id) DO NOTHING""",
+            (user_id, granted_by, _now_iso()),
+        )
+        conn.commit()
+    record_admin_audit(granted_by, "grant_admin", user_id)
+    return exists is None
+
+
+def revoke_admin(user_id: int, revoked_by: int) -> bool:
+    if is_owner_id(user_id):
+        return False
+    with _lock, _db() as conn:
+        cur = conn.execute(
+            "DELETE FROM bot_admins WHERE user_id=? AND role='admin'", (user_id,)
+        )
+        conn.commit()
+    if cur.rowcount:
+        record_admin_audit(revoked_by, "revoke_admin", user_id)
+    return cur.rowcount > 0
+
+
+def list_admins() -> list[dict]:
+    with _db() as conn:
+        rows = conn.execute(
+            """SELECT a.user_id, a.role, a.granted_at, u.username, u.first_name
+               FROM bot_admins a LEFT JOIN users u ON u.chat_id=a.user_id
+               ORDER BY CASE a.role WHEN 'owner' THEN 0 ELSE 1 END, a.granted_at"""
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def load_recent_activity(limit: int = 30) -> list[dict]:
+    limit = max(1, min(limit, 100))
+    with _db() as conn:
+        rows = conn.execute(
+            """SELECT e.id, e.chat_id, e.event_type, e.detail, e.created_at,
+                      u.username, u.first_name
+               FROM activity_events e LEFT JOIN users u ON u.chat_id=e.chat_id
+               ORDER BY e.id DESC LIMIT ?""",
+            (limit,),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def load_recent_users(limit: int = 30) -> list[dict]:
+    limit = max(1, min(limit, 100))
+    with _db() as conn:
+        rows = conn.execute(
+            """SELECT u.chat_id, u.username, u.first_name, u.created_at,
+                      u.last_seen_at,
+                      CASE WHEN s.chat_id IS NULL THEN 0 ELSE 1 END AS subscribed
+               FROM users u LEFT JOIN subscriptions s ON s.chat_id=u.chat_id
+               ORDER BY u.last_seen_at DESC LIMIT ?""",
+            (limit,),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def load_admin_audit(limit: int = 30) -> list[dict]:
+    limit = max(1, min(limit, 100))
+    with _db() as conn:
+        rows = conn.execute(
+            """SELECT id, actor_id, action, target_id, detail, created_at
+               FROM admin_audit ORDER BY id DESC LIMIT ?""",
+            (limit,),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def get_user_overview(chat_id: int) -> dict | None:
+    with _db() as conn:
+        user = conn.execute(
+            """SELECT u.*, CASE WHEN s.chat_id IS NULL THEN 0 ELSE 1 END AS subscribed
+               FROM users u LEFT JOIN subscriptions s ON s.chat_id=u.chat_id
+               WHERE u.chat_id=?""",
+            (chat_id,),
+        ).fetchone()
+        if not user:
+            return None
+        counts = {
+            "fan_posts": conn.execute(
+                "SELECT COUNT(*) FROM fan_messages WHERE chat_id=?", (chat_id,)
+            ).fetchone()[0],
+            "feedback": conn.execute(
+                "SELECT COUNT(*) FROM feedback WHERE chat_id=?", (chat_id,)
+            ).fetchone()[0],
+            "ai_messages": conn.execute(
+                "SELECT COUNT(*) FROM conversation_messages WHERE chat_id=?", (chat_id,)
+            ).fetchone()[0],
+        }
+        recent = conn.execute(
+            """SELECT event_type, detail, created_at FROM activity_events
+               WHERE chat_id=? ORDER BY id DESC LIMIT 10""",
+            (chat_id,),
+        ).fetchall()
+    return {**dict(user), **counts, "recent": [dict(row) for row in recent]}
 
 
 def load_subscriptions() -> dict[str, dict]:
@@ -767,14 +965,19 @@ def add_subscription(chat_id: int, username: str | None) -> bool:
             (chat_id, username, now),
         )
         conn.commit()
-        return exists is None
+        created = exists is None
+    record_activity(chat_id, "subscribed" if created else "subscription_opened")
+    return created
 
 
 def remove_subscription(chat_id: int) -> bool:
     with _lock, _db() as conn:
         cur = conn.execute("DELETE FROM subscriptions WHERE chat_id=?", (chat_id,))
         conn.commit()
-        return cur.rowcount > 0
+        removed = cur.rowcount > 0
+    if removed:
+        record_activity(chat_id, "unsubscribed")
+    return removed
 
 
 def load_fan_chat() -> list[dict]:
@@ -882,6 +1085,7 @@ def delete_user_data(chat_id: int) -> None:
         conn.execute("DELETE FROM feedback WHERE chat_id=?", (chat_id,))
         conn.execute("DELETE FROM fan_messages WHERE chat_id=?", (chat_id,))
         conn.execute("DELETE FROM voice_usage WHERE chat_id=?", (chat_id,))
+        conn.execute("DELETE FROM activity_events WHERE chat_id=?", (chat_id,))
         conn.execute("DELETE FROM users WHERE chat_id=?", (chat_id,))
         conn.commit()
 
@@ -929,6 +1133,29 @@ def get_stats() -> dict[str, int]:
             "feedback": conn.execute("SELECT COUNT(*) FROM feedback").fetchone()[0],
             "ai_messages": conn.execute(
                 "SELECT COUNT(*) FROM conversation_messages"
+            ).fetchone()[0],
+        }
+
+
+def get_activity_stats() -> dict[str, int]:
+    today = datetime.now().astimezone().date().isoformat()
+    with _db() as conn:
+        return {
+            "admins": conn.execute(
+                "SELECT COUNT(*) FROM bot_admins"
+            ).fetchone()[0],
+            "new_today": conn.execute(
+                "SELECT COUNT(*) FROM users WHERE substr(created_at, 1, 10)=?",
+                (today,),
+            ).fetchone()[0],
+            "active_today": conn.execute(
+                """SELECT COUNT(DISTINCT chat_id) FROM activity_events
+                   WHERE chat_id IS NOT NULL AND substr(created_at, 1, 10)=?""",
+                (today,),
+            ).fetchone()[0],
+            "events_today": conn.execute(
+                "SELECT COUNT(*) FROM activity_events WHERE substr(created_at, 1, 10)=?",
+                (today,),
             ).fetchone()[0],
         }
 
@@ -1291,44 +1518,55 @@ def _chunk_lines(lines: list[str], max_chars: int = 3500) -> list[str]:
 
 async def _forward_to_admin(context: ContextTypes.DEFAULT_TYPE,
                             update: Update, kind: str) -> None:
-    """Пересилає повідомлення користувача адміну + коротка мета."""
-    if not ADMIN_CHAT_ID:
-        return
+    """Пересилає повідомлення користувача всім чинним адміністраторам."""
     user = update.effective_user
-    if not user or user.id == ADMIN_CHAT_ID:
+    if not user or is_admin_id(user.id):
         return
     chat = update.effective_chat
     msg = update.message
     if not msg:
         return
-    try:
+    for admin in list_admins():
+        admin_id = int(admin["user_id"])
         try:
-            await context.bot.forward_message(
-                chat_id=ADMIN_CHAT_ID,
-                from_chat_id=chat.id,
-                message_id=msg.message_id,
+            try:
+                await context.bot.forward_message(
+                    chat_id=admin_id,
+                    from_chat_id=chat.id,
+                    message_id=msg.message_id,
+                )
+            except Exception:
+                pass
+            name = _md_escape(user.full_name or user.first_name or "Анонім")
+            uname = _md_escape(f"@{user.username}") if user.username else "_без username_"
+            snippet = _md_escape((msg.text or msg.caption or "[медіаповідомлення]")[:400])
+            meta = (
+                f"📨 *{_md_escape(kind)}*\n"
+                f"👤 {name} · {uname}\n"
+                f"🆔 `{user.id}`\n"
+                f"💬 {snippet}"
             )
-        except Exception:
-            pass
-        name = _md_escape(user.full_name or user.first_name or "Анонім")
-        uname = _md_escape(f"@{user.username}") if user.username else "_без username_"
-        snippet = _md_escape((msg.text or msg.caption or "[медіаповідомлення]")[:400])
-        meta = (
-            f"📨 *{_md_escape(kind)}*\n"
-            f"👤 {name} · {uname}\n"
-            f"🆔 `{user.id}`\n"
-            f"💬 {snippet}"
-        )
-        await context.bot.send_message(
-            ADMIN_CHAT_ID, meta, parse_mode=ParseMode.MARKDOWN
-        )
-    except Exception as e:
-        log.warning("forward_to_admin failed: %s", e)
+            await context.bot.send_message(
+                admin_id, meta, parse_mode=ParseMode.MARKDOWN
+            )
+        except Exception as e:
+            log.warning("forward_to_admin failed for %s: %s", admin_id, e)
 
 
 def _is_admin(update: Update) -> bool:
     user = update.effective_user
-    return bool(ADMIN_CHAT_ID and user and user.id == ADMIN_CHAT_ID)
+    return bool(user and is_admin_id(user.id))
+
+
+async def _require_owner(update: Update) -> bool:
+    user = update.effective_user
+    if user and is_owner_id(user.id):
+        return True
+    if update.effective_message:
+        await update.effective_message.reply_text(
+            "⛔ Ця команда доступна тільки власнику бота."
+        )
+    return False
 
 
 async def _require_admin(update: Update) -> bool:
@@ -1868,6 +2106,11 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     query = update.callback_query
     data = query.data or ""
     touch_user(update)
+    record_activity(
+        update.effective_chat.id if update.effective_chat else None,
+        "button",
+        data,
+    )
 
     # Callback відповідаємо рівно один раз. Для дій із наступним повідомленням
     # одразу показуємо користувачу зрозумілу підказку.
@@ -2108,6 +2351,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     text = (update.message.text or "").strip()
     if not text:
         return
+    record_activity(update.effective_chat.id, "text_message", f"length={len(text)}")
     if len(text) > MAX_MESSAGE_CHARS:
         await update.message.reply_text(
             f"🕯️ Повідомлення задовге. Максимум {MAX_MESSAGE_CHARS} символів.",
@@ -2221,6 +2465,11 @@ async def on_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     media = message.voice or message.audio
     if not media:
         return
+    record_activity(
+        update.effective_chat.id,
+        "voice_message",
+        f"duration={getattr(media, 'duration', 0) or 0}",
+    )
     if media.file_size and media.file_size > 20 * 1024 * 1024:
         await message.reply_text(
             "🎙️ Файл завеликий. Надішли голосове до 20 МБ.",
@@ -2291,12 +2540,13 @@ async def on_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def cmd_whoami(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Показує користувачу його Telegram ID — щоб налаштувати ADMIN_CHAT_ID."""
     user = update.effective_user
-    is_admin = ADMIN_CHAT_ID is not None and user and user.id == ADMIN_CHAT_ID
+    is_admin = bool(user and is_admin_id(user.id))
+    is_owner = bool(user and is_owner_id(user.id))
     admin_set = "✅ задано" if ADMIN_CHAT_ID else "❌ не задано"
     body = (
         f"🆔 Твій Telegram ID: `{user.id if user else '?'}`\n"
         f"👤 {_md_escape(user.full_name) if user else ''}\n"
-        f"🔧 Адмін бота: {'✅ це ти' if is_admin else '— інший'}\n"
+        f"🔧 Роль: {'власник' if is_owner else 'адміністратор' if is_admin else 'фанат'}\n"
         f"⚙️ ADMIN_CHAT_ID у середовищі: {admin_set}\n\n"
         f"_Щоб отримувати усі повідомлення від людей — додай у Render → Environment:_\n"
         f"`ADMIN_CHAT_ID={user.id if user else 'TWOJ_ID'}`\n"
@@ -2316,6 +2566,7 @@ async def cmd_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             reply_markup=MAIN_KEYBOARD,
         )
         return
+    record_activity(update.effective_chat.id, "search", query[:200])
     matches = _find_tracks(query)
     if not matches:
         await update.message.reply_text(
@@ -2391,6 +2642,13 @@ async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
         "🪓 *Кузня адміністратора*\n\n"
         "/stats — статистика\n"
+        "/users [кількість] — останні користувачі\n"
+        "/userinfo TelegramID — профіль та останні дії\n"
+        "/activity [кількість] — жива активність\n"
+        "/audit [кількість] — журнал дій адміністраторів\n"
+        "/admins — список адміністраторів\n"
+        "/addadmin TelegramID — надати права (тільки власник)\n"
+        "/removeadmin TelegramID — забрати права (тільки власник)\n"
         "/broadcast текст — розсилка підписникам\n"
         "/release назва | URL | опис — додати реліз і розіслати\n"
         "/hidepost ID — сховати допис фан-чату\n"
@@ -2400,10 +2658,150 @@ async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 
+def _command_limit(args: list[str], default: int = 20) -> int:
+    if not args:
+        return default
+    try:
+        return max(1, min(int(args[0]), 100))
+    except ValueError:
+        return default
+
+
+async def cmd_admins(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await _require_admin(update):
+        return
+    rows = list_admins()
+    lines = ["🛡️ *Адміністратори бота*", ""]
+    for row in rows:
+        name = row.get("first_name") or row.get("username") or "невідомо"
+        role = "Власник" if row["role"] == "owner" else "Адмін"
+        lines.append(
+            f"• *{role}* — `{row['user_id']}` · {_md_escape(str(name))}"
+        )
+    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
+
+
+async def cmd_add_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await _require_owner(update):
+        return
+    if not context.args or not context.args[0].isdigit():
+        await update.message.reply_text(
+            "Формат: /addadmin TelegramID\nКористувач спершу має відкрити бота."
+        )
+        return
+    target_id = int(context.args[0])
+    actor_id = update.effective_user.id
+    created = grant_admin(target_id, actor_id)
+    await update.message.reply_text(
+        f"✅ Права адміністратора надано `{target_id}`."
+        if created else f"ℹ️ `{target_id}` уже має права.",
+        parse_mode=ParseMode.MARKDOWN,
+    )
+
+
+async def cmd_remove_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await _require_owner(update):
+        return
+    if not context.args or not context.args[0].isdigit():
+        await update.message.reply_text("Формат: /removeadmin TelegramID")
+        return
+    target_id = int(context.args[0])
+    removed = revoke_admin(target_id, update.effective_user.id)
+    await update.message.reply_text(
+        f"✅ Права адміністратора забрано у `{target_id}`."
+        if removed
+        else "⚠️ Адміна не знайдено або це власник, якого не можна видалити.",
+        parse_mode=ParseMode.MARKDOWN,
+    )
+
+
+async def cmd_users(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await _require_admin(update):
+        return
+    rows = load_recent_users(_command_limit(context.args))
+    lines = ["👥 *Останні користувачі*", ""]
+    for row in rows:
+        name = row["first_name"] or (
+            f"@{row['username']}" if row["username"] else "без імені"
+        )
+        sub = "🔔" if row["subscribed"] else "—"
+        lines.append(
+            f"{sub} `{row['chat_id']}` · {_md_escape(str(name))}\n"
+            f"   остання дія: {_md_escape(row['last_seen_at'])}"
+        )
+    for chunk in _chunk_lines(lines):
+        await update.message.reply_text(chunk, parse_mode=ParseMode.MARKDOWN)
+
+
+async def cmd_activity(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await _require_admin(update):
+        return
+    rows = load_recent_activity(_command_limit(context.args))
+    lines = ["👁️ *Остання активність*", ""]
+    for row in rows:
+        who = row["username"] or row["first_name"] or row["chat_id"] or "система"
+        detail = f" · {_md_escape(str(row['detail']))}" if row["detail"] else ""
+        lines.append(
+            f"• `{row['chat_id'] or '—'}` · {_md_escape(str(who))}\n"
+            f"  {_md_escape(row['event_type'])}{detail}\n"
+            f"  {_md_escape(row['created_at'])}"
+        )
+    for chunk in _chunk_lines(lines):
+        await update.message.reply_text(chunk, parse_mode=ParseMode.MARKDOWN)
+
+
+async def cmd_userinfo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await _require_admin(update):
+        return
+    if not context.args or not context.args[0].isdigit():
+        await update.message.reply_text("Формат: /userinfo TelegramID")
+        return
+    info = get_user_overview(int(context.args[0]))
+    if not info:
+        await update.message.reply_text("Користувача не знайдено.")
+        return
+    recent = "\n".join(
+        f"• {_md_escape(item['event_type'])}"
+        + (f": {_md_escape(str(item['detail']))}" if item["detail"] else "")
+        for item in info["recent"]
+    ) or "—"
+    await update.message.reply_text(
+        "👤 *Профіль користувача*\n\n"
+        f"ID: `{info['chat_id']}`\n"
+        f"Імʼя: {_md_escape(info['first_name'] or '—')}\n"
+        f"Username: {_md_escape('@' + info['username']) if info['username'] else '—'}\n"
+        f"Підписка: {'так' if info['subscribed'] else 'ні'}\n"
+        f"Вперше: {_md_escape(info['created_at'])}\n"
+        f"Останній вхід: {_md_escape(info['last_seen_at'])}\n"
+        f"AI-повідомлення: {info['ai_messages']}\n"
+        f"Відгуки: {info['feedback']}\n"
+        f"Фан-дописи: {info['fan_posts']}\n\n"
+        f"*Останні інтереси та дії:*\n{recent}",
+        parse_mode=ParseMode.MARKDOWN,
+    )
+
+
+async def cmd_audit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await _require_admin(update):
+        return
+    rows = load_admin_audit(_command_limit(context.args))
+    lines = ["📜 *Журнал дій адміністраторів*", ""]
+    for row in rows:
+        target = f" → `{row['target_id']}`" if row["target_id"] else ""
+        detail = f" · {_md_escape(str(row['detail']))}" if row["detail"] else ""
+        lines.append(
+            f"• `{row['actor_id']}` · {_md_escape(row['action'])}{target}{detail}\n"
+            f"  {_md_escape(row['created_at'])}"
+        )
+    for chunk in _chunk_lines(lines):
+        await update.message.reply_text(chunk, parse_mode=ParseMode.MARKDOWN)
+
+
 async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await _require_admin(update):
         return
     stats = get_stats()
+    activity_stats = get_activity_stats()
     voice_stats = get_voice_stats()
     await update.message.reply_text(
         "📊 *Статистика Gathering Of The Fallen*\n\n"
@@ -2412,6 +2810,11 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         f"🕯️ Дописи біля вогнища: {stats['fan_messages']}\n"
         f"💬 Відгуки: {stats['feedback']}\n"
         f"🤖 Повідомлення AI: {stats['ai_messages']}\n\n"
+        "👁️ *Активність сьогодні*\n"
+        f"Нові користувачі: {activity_stats['new_today']}\n"
+        f"Активні користувачі: {activity_stats['active_today']}\n"
+        f"Дії у боті: {activity_stats['events_today']}\n"
+        f"Адміністратори: {activity_stats['admins']}\n\n"
         "🎙️ *Голосові відповіді*\n"
         f"Сьогодні: {voice_stats['today']}\n"
         f"За останні 7 днів: {voice_stats['last_7_days']}\n"
@@ -2429,6 +2832,11 @@ async def cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
     delivered, failed = await broadcast_to_subscribers(
         context, _brand(f"📣 *Вістка від гурту*\n\n{_md_escape(text)}")
+    )
+    record_admin_audit(
+        update.effective_user.id,
+        "broadcast",
+        detail=f"delivered={delivered}; failed={failed}",
     )
     await update.message.reply_text(
         f"✅ Доставлено: {delivered}\n⚠️ Не доставлено: {failed}"
@@ -2466,6 +2874,11 @@ async def cmd_release(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         else None
     )
     delivered, failed = await broadcast_to_subscribers(context, body, markup)
+    record_admin_audit(
+        update.effective_user.id,
+        "release",
+        detail=f"id={release_id}; title={title}",
+    )
     await update.message.reply_text(
         f"✅ Реліз #{release_id} додано.\n"
         f"Доставлено: {delivered}, помилок: {failed}"
@@ -2479,6 +2892,10 @@ async def cmd_hide_post(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await update.message.reply_text("Формат: /hidepost ID")
         return
     hidden = hide_fan_message(int(context.args[0]))
+    if hidden:
+        record_admin_audit(
+            update.effective_user.id, "hide_post", int(context.args[0])
+        )
     await update.message.reply_text(
         "✅ Допис приховано." if hidden else "Допис із таким ID не знайдено."
     )
@@ -2502,6 +2919,9 @@ async def cmd_reply_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             _brand(f"💬 *Відповідь від гурту*\n\n{_md_escape(text)}"),
             parse_mode=ParseMode.MARKDOWN,
             reply_markup=MAIN_KEYBOARD,
+        )
+        record_admin_audit(
+            update.effective_user.id, "reply_user", chat_id, f"length={len(text)}"
         )
         await update.message.reply_text("✅ Відповідь доставлено.")
     except Exception as e:
@@ -2579,6 +2999,13 @@ def build_app() -> Application:
     app.add_handler(CommandHandler("privacy", cmd_privacy))
     app.add_handler(CommandHandler("voice", cmd_voice))
     app.add_handler(CommandHandler("admin", cmd_admin))
+    app.add_handler(CommandHandler("admins", cmd_admins))
+    app.add_handler(CommandHandler("addadmin", cmd_add_admin))
+    app.add_handler(CommandHandler("removeadmin", cmd_remove_admin))
+    app.add_handler(CommandHandler("users", cmd_users))
+    app.add_handler(CommandHandler("userinfo", cmd_userinfo))
+    app.add_handler(CommandHandler("activity", cmd_activity))
+    app.add_handler(CommandHandler("audit", cmd_audit))
     app.add_handler(CommandHandler("stats", cmd_stats))
     app.add_handler(CommandHandler("broadcast", cmd_broadcast))
     app.add_handler(CommandHandler("release", cmd_release))
