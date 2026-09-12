@@ -560,6 +560,53 @@ class BotCoreTests(unittest.TestCase):
             main.VOICE_REPLY_DAILY_LIMIT = original_limit
             main.VOICE_USAGE_WARNING_PERCENT = original_percent
 
+    def test_voice_usage_warning_retries_after_send_failure_without_duplicates(
+        self,
+    ) -> None:
+        original_admin = main.ADMIN_CHAT_ID
+        original_limit = main.VOICE_REPLY_DAILY_LIMIT
+        original_percent = main.VOICE_USAGE_WARNING_PERCENT
+        try:
+            main.ADMIN_CHAT_ID = 999
+            main.VOICE_REPLY_DAILY_LIMIT = 2
+            main.VOICE_USAGE_WARNING_PERCENT = 50
+            self.assertTrue(main._reserve_voice_reply(101))
+
+            bot = SimpleNamespace(
+                send_message=AsyncMock(
+                    side_effect=[RuntimeError("temporary Telegram failure"), None]
+                )
+            )
+            message = SimpleNamespace(get_bot=lambda: bot)
+
+            asyncio.run(main._notify_voice_usage_warning(message))
+
+            self.assertEqual(bot.send_message.await_count, 1)
+            today = datetime.now().astimezone().date().isoformat()
+            with main._db() as conn:
+                self.assertIsNone(
+                    conn.execute(
+                        "SELECT value FROM metadata WHERE key=?",
+                        (f"voice_usage_warning:{today}",),
+                    ).fetchone()
+                )
+
+            asyncio.run(main._notify_voice_usage_warning(message))
+
+            self.assertEqual(bot.send_message.await_count, 2)
+            self.assertEqual(
+                bot.send_message.await_args_list[0].kwargs["text"],
+                bot.send_message.await_args_list[1].kwargs["text"],
+            )
+
+            asyncio.run(main._notify_voice_usage_warning(message))
+
+            self.assertEqual(bot.send_message.await_count, 2)
+        finally:
+            main.ADMIN_CHAT_ID = original_admin
+            main.VOICE_REPLY_DAILY_LIMIT = original_limit
+            main.VOICE_USAGE_WARNING_PERCENT = original_percent
+
     def test_voice_stats_aggregate_usage_without_message_texts(self) -> None:
         today = datetime.now().astimezone().date()
         main.set_voice_replies(101, True)
