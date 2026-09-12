@@ -88,6 +88,7 @@ if not OPENAI_API_KEY:
 
 DATA_DIR = Path(__file__).parent / "data"
 DATA_DIR.mkdir(exist_ok=True)
+CATALOG_FILE = Path(__file__).parent / "catalog" / "fallen-catalog.json"
 DB_FILE = DATA_DIR / "gathering.sqlite3"
 SUBS_FILE = DATA_DIR / "subscriptions.json"
 FEEDBACK_FILE = DATA_DIR / "feedback.json"
@@ -344,6 +345,103 @@ TRACKS = [
     if video["title"].casefold().replace("’", "'").replace("ʼ", "'").replace("`", "'")
     not in _known_track_titles
 ] + TRACKS
+
+
+def _normalize_catalog_title(title: str) -> str:
+    return title.casefold().replace("’", "'").replace("ʼ", "'").replace("`", "'").strip()
+
+
+def _load_catalog(path: Path = CATALOG_FILE) -> dict[str, Any]:
+    """Load and validate the shared bot/Mini App music catalog."""
+    try:
+        catalog = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"Не вдалося прочитати каталог {path}: {exc}") from exc
+
+    required_lists = ("tracks", "videos", "releases")
+    if not isinstance(catalog, dict) or any(
+        not isinstance(catalog.get(key), list) for key in required_lists
+    ):
+        raise RuntimeError("Каталог повинен містити масиви tracks, videos і releases.")
+    if not isinstance(catalog.get("bandLinks"), dict) or not isinstance(
+        catalog.get("moods"), dict
+    ):
+        raise RuntimeError("Каталог повинен містити об'єкти bandLinks і moods.")
+
+    allowed_moods = set(catalog["moods"])
+    seen_titles: set[str] = set()
+    seen_video_ids: set[str] = set()
+    for section in ("tracks", "videos"):
+        for item in catalog[section]:
+            if not isinstance(item, dict) or not isinstance(item.get("title"), str):
+                raise RuntimeError(f"Кожен запис {section} повинен мати назву.")
+            normalized = _normalize_catalog_title(item["title"])
+            if not normalized or normalized in seen_titles:
+                raise RuntimeError(f"Дубльована або порожня назва: {item['title']!r}")
+            seen_titles.add(normalized)
+            moods = item.get("moods")
+            if (
+                not isinstance(moods, list)
+                or not moods
+                or any(mood not in allowed_moods for mood in moods)
+            ):
+                raise RuntimeError(f"Некоректні настрої для {item['title']!r}.")
+            if section == "videos":
+                video_id = item.get("videoId")
+                if not isinstance(video_id, str) or not video_id or video_id in seen_video_ids:
+                    raise RuntimeError(f"Некоректний або дубльований videoId: {video_id!r}")
+                seen_video_ids.add(video_id)
+            links = item.get("links", {})
+            if not isinstance(links, dict) or any(
+                not isinstance(url, str) or not url.startswith("https://")
+                for url in links.values()
+            ):
+                raise RuntimeError(f"Некоректні посилання для {item['title']!r}.")
+
+    release_ids: set[str] = set()
+    for release in catalog["releases"]:
+        if not isinstance(release, dict) or not all(
+            isinstance(release.get(key), str) and release[key]
+            for key in ("id", "title", "description", "date", "url", "accent")
+        ):
+            raise RuntimeError("Кожен реліз повинен мати всі обов'язкові поля.")
+        if release["id"] in release_ids or not release["url"].startswith("https://"):
+            raise RuntimeError(f"Некоректний або дубльований реліз: {release['id']!r}")
+        release_ids.add(release["id"])
+    return catalog
+
+
+_CATALOG = _load_catalog()
+BAND_NAME = _CATALOG["bandName"]
+BAND_LINKS = _CATALOG["bandLinks"]
+MOODS = _CATALOG["moods"]
+RELEASES = _CATALOG["releases"]
+YOUTUBE_VIDEOS = [
+    {
+        "title": video["title"],
+        "video_id": video["videoId"],
+        "duration": video["duration"],
+        "tags": video["moods"],
+    }
+    for video in _CATALOG["videos"]
+]
+TRACKS = [
+    {"title": video["title"], "tags": video["moods"]}
+    for video in _CATALOG["videos"]
+] + [
+    {"title": track["title"], "tags": track["moods"]}
+    for track in _CATALOG["tracks"]
+]
+TRACK_LINKS = {
+    track["title"]: dict(track.get("links", {}))
+    for track in _CATALOG["tracks"]
+}
+for _video in _CATALOG["videos"]:
+    TRACK_LINKS[_video["title"]] = {
+        "YouTube": _yt(_video["videoId"]),
+        "YouTube Music": f"https://music.youtube.com/watch?v={_video['videoId']}",
+        **_video.get("links", {}),
+    }
 
 MOODS = {
     "nostalgia": "🕯️ Ностальгія / сум за домом",
@@ -1529,27 +1627,20 @@ async def section_tracks(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 
 async def section_releases(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    releases = load_releases(5)
-    if releases:
-        lines = ["🔥 *Останні релізи*", ""]
-        for item in releases:
-            title = _md_escape(item["title"])
-            description = _md_escape(item.get("description") or "")
-            lines.append(f"• *{title}*")
-            if description:
-                lines.append(f"  {description}")
-        lines += [
-            "",
-            "Підпишись 🔔 — бот надішле новий офіційний анонс.",
-        ]
-        text = _brand("\n".join(lines))
-    else:
-        text = _brand(
-            "🔥 *Релізи Gathering Of The Fallen*\n\n"
-            "• Альбом *Music Of My Soul* (2025) — 21 трек 🪓\n\n"
-            "Нові анонси зʼявляться тут після публікації адміністратором.\n"
-            "Підпишись 🔔 — бот надішле кожен офіційний анонс."
-        )
+    releases = load_releases(5) or RELEASES[:5]
+    lines = ["🔥 *Останні релізи*", ""]
+    for item in releases:
+        title = _md_escape(item["title"])
+        description = _md_escape(item.get("description") or "")
+        date = _md_escape(item.get("date") or "")
+        lines.append(f"• *{title}*" + (f" ({date})" if date else ""))
+        if description:
+            lines.append(f"  {description}")
+    lines += [
+        "",
+        "Підпишись 🔔 — бот надішле новий офіційний анонс.",
+    ]
+    text = _brand("\n".join(lines))
     buttons = [[InlineKeyboardButton("🔔 Підписатися", callback_data="subscribe")]]
     for item in releases:
         if item.get("url"):

@@ -101,6 +101,36 @@ class BotCoreTests(unittest.TestCase):
             ).endswith("eBgXAXDKgDk")
         )
 
+    def test_shared_catalog_drives_bot_tracks_releases_and_links(self) -> None:
+        catalog = main._load_catalog()
+        expected_titles = [
+            item["title"] for item in catalog["videos"] + catalog["tracks"]
+        ]
+        self.assertEqual([track["title"] for track in main.TRACKS], expected_titles)
+        self.assertEqual(main.RELEASES, catalog["releases"])
+        self.assertEqual(
+            main.RELEASES[0]["title"],
+            "Music Of My Soul",
+        )
+        self.assertEqual(
+            main.track_url("Гори", "YouTube"),
+            next(
+                track["links"]["YouTube"]
+                for track in catalog["tracks"]
+                if track["title"] == "Гори"
+            ),
+        )
+
+    def test_shared_catalog_rejects_duplicate_titles(self) -> None:
+        catalog = main._load_catalog()
+        catalog["tracks"].append(dict(catalog["tracks"][0]))
+        path = Path(self.temp_dir.name) / "invalid-catalog.json"
+        import json
+
+        path.write_text(json.dumps(catalog, ensure_ascii=False), encoding="utf-8")
+        with self.assertRaisesRegex(RuntimeError, "Дубльована"):
+            main._load_catalog(path)
+
     def test_fan_chat_rejects_spam_shapes(self) -> None:
         self.assertIsNotNone(main._fan_message_problem("https://spam.example"))
         self.assertIsNotNone(main._fan_message_problem("а" * 20))
