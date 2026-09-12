@@ -422,6 +422,7 @@ class BotCoreTests(unittest.TestCase):
     def test_voice_warning_command_requires_owner_and_rejects_invalid_values(self) -> None:
         original_admin = main.ADMIN_CHAT_ID
         original_percent = main.VOICE_USAGE_WARNING_PERCENT
+        original_environment_percent = main.VOICE_USAGE_WARNING_PERCENT_ENVIRONMENT
         main.ADMIN_CHAT_ID = 999
         message = SimpleNamespace(reply_text=AsyncMock())
         update = SimpleNamespace(
@@ -455,6 +456,57 @@ class BotCoreTests(unittest.TestCase):
         finally:
             main.ADMIN_CHAT_ID = original_admin
             main.VOICE_USAGE_WARNING_PERCENT = original_percent
+            main.VOICE_USAGE_WARNING_PERCENT_ENVIRONMENT = original_environment_percent
+
+    def test_voice_warning_reset_is_owner_only_and_restores_environment_value(self) -> None:
+        original_admin = main.ADMIN_CHAT_ID
+        original_percent = main.VOICE_USAGE_WARNING_PERCENT
+        original_environment_percent = main.VOICE_USAGE_WARNING_PERCENT_ENVIRONMENT
+        main.ADMIN_CHAT_ID = 999
+        main.VOICE_USAGE_WARNING_PERCENT_ENVIRONMENT = 65
+        message = SimpleNamespace(reply_text=AsyncMock())
+        owner_update = SimpleNamespace(
+            effective_user=SimpleNamespace(id=999),
+            message=message,
+        )
+        non_owner_update = SimpleNamespace(
+            effective_user=SimpleNamespace(id=1000),
+            message=message,
+            effective_message=message,
+        )
+        try:
+            main.set_voice_usage_warning_percent(35)
+            asyncio.run(
+                main.cmd_voice_warning(
+                    non_owner_update, SimpleNamespace(args=["reset"])
+                )
+            )
+            self.assertIn("тільки власнику", message.reply_text.await_args.args[0])
+            self.assertEqual(main.get_voice_usage_warning_percent(), 35)
+
+            message.reply_text.reset_mock()
+            asyncio.run(
+                main.cmd_voice_warning(owner_update, SimpleNamespace(args=["reset"]))
+            )
+
+            self.assertEqual(main.get_voice_usage_warning_percent(), 65)
+            self.assertEqual(main.VOICE_USAGE_WARNING_PERCENT, 65)
+            with main._db() as conn:
+                self.assertIsNone(
+                    conn.execute(
+                        "SELECT value FROM metadata WHERE key=?",
+                        (main.VOICE_USAGE_WARNING_PERCENT_METADATA_KEY,),
+                    ).fetchone()
+                )
+            self.assertIn("повернуто до налаштування середовища", message.reply_text.await_args.args[0])
+            audit = main.load_admin_audit(limit=1)[0]
+            self.assertEqual(audit["action"], "reset_voice_warning_percent")
+            self.assertEqual(audit["actor_id"], 999)
+            self.assertIn("source=environment", audit["detail"])
+        finally:
+            main.ADMIN_CHAT_ID = original_admin
+            main.VOICE_USAGE_WARNING_PERCENT = original_percent
+            main.VOICE_USAGE_WARNING_PERCENT_ENVIRONMENT = original_environment_percent
 
     def test_voice_usage_warning_contains_only_aggregate_numbers(self) -> None:
         original_admin = main.ADMIN_CHAT_ID

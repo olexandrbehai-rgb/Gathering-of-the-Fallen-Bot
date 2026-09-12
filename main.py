@@ -88,6 +88,7 @@ VOICE_REPLY_DAILY_LIMIT = int(os.environ.get("VOICE_REPLY_DAILY_LIMIT", "10"))
 VOICE_USAGE_WARNING_PERCENT = max(
     1, min(100, int(os.environ.get("VOICE_USAGE_WARNING_PERCENT", "80")))
 )
+VOICE_USAGE_WARNING_PERCENT_ENVIRONMENT = VOICE_USAGE_WARNING_PERCENT
 VOICE_REPLY_DAILY_LIMIT_METADATA_KEY = "voice_reply_daily_limit"
 VOICE_USAGE_WARNING_PERCENT_METADATA_KEY = "voice_usage_warning_percent"
 OPENAI_TTS_MODEL = os.environ.get("OPENAI_TTS_MODEL", "gpt-4o-mini-tts")
@@ -3014,7 +3015,7 @@ async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/addadmin TelegramID — надати права (тільки власник)\n"
         "/removeadmin TelegramID — забрати права (тільки власник)\n"
         "/voicelimit [кількість] — денний ліміт голосових відповідей (власник)\n"
-        "/voicewarning [відсоток] — поріг голосового попередження (власник)\n"
+        "/voicewarning [відсоток|reset] — поріг голосового попередження (власник)\n"
         "/broadcast текст — розсилка підписникам\n"
         "/release назва | URL | опис — додати реліз і розіслати\n"
         "/hidepost ID — сховати допис фан-чату\n"
@@ -3074,7 +3075,7 @@ async def cmd_voice_warning(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         return
     if len(context.args) > 1:
         await update.message.reply_text(
-            "Формат: /voicewarning [ціле число від 1 до 100]"
+            "Формат: /voicewarning [ціле число від 1 до 100|reset]"
         )
         return
     if not context.args:
@@ -3086,10 +3087,26 @@ async def cmd_voice_warning(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         return
 
     raw_percent = context.args[0].strip()
+    if raw_percent.casefold() == "reset":
+        previous_percent = get_voice_usage_warning_percent()
+        percent = reset_voice_usage_warning_percent()
+        record_admin_audit(
+            update.effective_user.id,
+            "reset_voice_warning_percent",
+            detail=f"from={previous_percent}; to={percent}; source=environment",
+        )
+        await update.message.reply_text(
+            f"✅ Поріг попередження повернуто до налаштування середовища: "
+            f"{percent}%.\n"
+            "Збережене перевизначення видалено, нове значення застосовується "
+            "без перезапуску бота."
+        )
+        return
     if not raw_percent.isdecimal():
         await update.message.reply_text(
             "⚠️ Некоректний поріг. Вкажіть ціле число від 1 до 100 "
-            "(без знака %), наприклад: /voicewarning 80."
+            "(без знака %), наприклад: /voicewarning 80, "
+            "або /voicewarning reset."
         )
         return
     percent = int(raw_percent)
@@ -3769,6 +3786,19 @@ def set_voice_usage_warning_percent(percent: int) -> None:
         )
         conn.commit()
     VOICE_USAGE_WARNING_PERCENT = percent
+
+
+def reset_voice_usage_warning_percent() -> int:
+    """Видаляє runtime-перевизначення й повертає поріг із середовища."""
+    global VOICE_USAGE_WARNING_PERCENT
+    with _lock, _db() as conn:
+        conn.execute(
+            "DELETE FROM metadata WHERE key=?",
+            (VOICE_USAGE_WARNING_PERCENT_METADATA_KEY,),
+        )
+        conn.commit()
+    VOICE_USAGE_WARNING_PERCENT = VOICE_USAGE_WARNING_PERCENT_ENVIRONMENT
+    return VOICE_USAGE_WARNING_PERCENT
 
 
 def set_voice_reply_daily_limit(limit: int) -> None:
