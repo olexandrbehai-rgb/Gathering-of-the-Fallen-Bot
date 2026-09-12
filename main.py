@@ -88,6 +88,7 @@ VOICE_REPLY_DAILY_LIMIT = int(os.environ.get("VOICE_REPLY_DAILY_LIMIT", "10"))
 VOICE_USAGE_WARNING_PERCENT = max(
     1, min(100, int(os.environ.get("VOICE_USAGE_WARNING_PERCENT", "80")))
 )
+VOICE_REPLY_DAILY_LIMIT_METADATA_KEY = "voice_reply_daily_limit"
 VOICE_USAGE_WARNING_PERCENT_METADATA_KEY = "voice_usage_warning_percent"
 OPENAI_TTS_MODEL = os.environ.get("OPENAI_TTS_MODEL", "gpt-4o-mini-tts")
 OPENAI_TTS_VOICE = os.environ.get("OPENAI_TTS_VOICE", "onyx")
@@ -593,7 +594,7 @@ def _save_json(path: Path, data: Any) -> None:
 
 def init_database() -> None:
     """Створює схему та одноразово переносить старі JSON-дані в SQLite."""
-    global VOICE_USAGE_WARNING_PERCENT
+    global VOICE_REPLY_DAILY_LIMIT, VOICE_USAGE_WARNING_PERCENT
     with _lock, _db() as conn:
         conn.executescript(
             """
@@ -701,6 +702,22 @@ def init_database() -> None:
                 ON admin_role_outbox(synced_at, version);
             """
         )
+        stored_daily_limit = conn.execute(
+            "SELECT value FROM metadata WHERE key=?",
+            (VOICE_REPLY_DAILY_LIMIT_METADATA_KEY,),
+        ).fetchone()
+        if stored_daily_limit:
+            try:
+                persisted_limit = int(stored_daily_limit["value"])
+            except (TypeError, ValueError):
+                persisted_limit = 0
+            if persisted_limit > 0:
+                VOICE_REPLY_DAILY_LIMIT = persisted_limit
+            else:
+                log.warning(
+                    "Ignoring invalid persisted voice reply daily limit: %r",
+                    stored_daily_limit["value"],
+                )
         stored_warning_percent = conn.execute(
             "SELECT value FROM metadata WHERE key=?",
             (VOICE_USAGE_WARNING_PERCENT_METADATA_KEY,),
@@ -808,6 +825,25 @@ def get_voice_usage_warning_percent() -> int:
         if 1 <= persisted_percent <= 100:
             return persisted_percent
     return VOICE_USAGE_WARNING_PERCENT
+
+
+def get_voice_reply_daily_limit() -> int:
+    """Повертає активний денний ліміт, включно зі збереженим значенням."""
+    with _db() as conn:
+        row = conn.execute(
+            "SELECT value FROM metadata WHERE key=?",
+            (VOICE_REPLY_DAILY_LIMIT_METADATA_KEY,),
+        ).fetchone()
+    if row:
+        try:
+            persisted_limit = int(row["value"])
+        except (TypeError, ValueError):
+            persisted_limit = 0
+        if persisted_limit > 0:
+            return persisted_limit
+    return VOICE_REPLY_DAILY_LIMIT
+
+
 def touch_user(update: Update) -> None:
     user = update.effective_user
     chat = update.effective_chat
@@ -2736,7 +2772,8 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     voice_status = await _send_voice_reply(update.message, chat_id, reply)
     if voice_status == "limit":
         await update.message.reply_text(
-            f"🔇 Денний ліміт голосових відповідей ({VOICE_REPLY_DAILY_LIMIT}) "
+            f"🔇 Денний ліміт голосових відповідей "
+            f"({get_voice_reply_daily_limit()}) "
             "вичерпано. Текстові відповіді працюють без змін.",
             reply_markup=MAIN_KEYBOARD,
         )
@@ -2843,7 +2880,7 @@ async def on_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if voice_status == "limit":
             await message.reply_text(
                 f"🔇 Денний ліміт голосових відповідей "
-                f"({VOICE_REPLY_DAILY_LIMIT}) вичерпано.",
+                f"({get_voice_reply_daily_limit()}) вичерпано.",
                 reply_markup=MAIN_KEYBOARD,
             )
     except AIQuotaError:
@@ -2976,6 +3013,7 @@ async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/admins — список адміністраторів\n"
         "/addadmin TelegramID — надати права (тільки власник)\n"
         "/removeadmin TelegramID — забрати права (тільки власник)\n"
+        "/voicelimit [кількість] — денний ліміт голосових відповідей (власник)\n"
         "/voicewarning [відсоток] — поріг голосового попередження (власник)\n"
         "/broadcast текст — розсилка підписникам\n"
         "/release назва | URL | опис — додати реліз і розіслати\n"
@@ -2984,6 +3022,52 @@ async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/whoami — перевірити ADMIN_CHAT_ID",
         parse_mode=ParseMode.MARKDOWN,
     )
+
+
+async def cmd_voice_limit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await _require_owner(update):
+        return
+    if len(context.args) > 1:
+        await update.message.reply_text(
+            "Формат: /voicelimit [ціле число більше нуля]"
+        )
+        return
+    if not context.args:
+        limit = get_voice_reply_daily_limit()
+        await update.message.reply_text(
+            f"🎙️ Поточний денний ліміт голосових відповідей: {limit}.\n"
+            "Щоб змінити його, надішліть /voicelimit 20."
+        )
+        return
+
+    raw_limit = context.args[0].strip()
+    if not raw_limit.isdecimal():
+        await update.message.reply_text(
+            "⚠️ Некоректний денний ліміт. Вкажіть ціле число більше нуля "
+            "(без знака +), наприклад: /voicelimit 20."
+        )
+        return
+    limit = int(raw_limit)
+    if limit < 1:
+        await update.message.reply_text(
+            "⚠️ Некоректний денний ліміт. Значення має бути цілим числом "
+            "більше нуля."
+        )
+        return
+
+    previous_limit = get_voice_reply_daily_limit()
+    set_voice_reply_daily_limit(limit)
+    record_admin_audit(
+        update.effective_user.id,
+        "set_voice_reply_daily_limit",
+        detail=f"from={previous_limit}; to={limit}",
+    )
+    await update.message.reply_text(
+        f"✅ Денний ліміт голосових відповідей змінено: "
+        f"{previous_limit} → {limit}.\n"
+        "Нове значення застосовується без перезапуску бота."
+    )
+
 
 async def cmd_voice_warning(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await _require_owner(update):
@@ -3420,6 +3504,7 @@ def build_app() -> Application:
     app.add_handler(CommandHandler("admins", cmd_admins))
     app.add_handler(CommandHandler("addadmin", cmd_add_admin))
     app.add_handler(CommandHandler("removeadmin", cmd_remove_admin))
+    app.add_handler(CommandHandler("voicelimit", cmd_voice_limit))
     app.add_handler(CommandHandler("voicewarning", cmd_voice_warning))
     app.add_handler(CommandHandler("users", cmd_users))
     app.add_handler(CommandHandler("userinfo", cmd_userinfo))
@@ -3533,12 +3618,13 @@ def _shorten_for_voice(text: str, max_chars: int | None = None) -> str:
 def _reserve_voice_reply(chat_id: int) -> bool:
     """Атомарно резервує одну TTS-відповідь у денному бюджеті."""
     usage_date = datetime.now().astimezone().date().isoformat()
+    daily_limit = get_voice_reply_daily_limit()
     with _lock, _db() as conn:
         row = conn.execute(
             "SELECT reply_count FROM voice_usage WHERE chat_id=? AND usage_date=?",
             (chat_id, usage_date),
         ).fetchone()
-        if row and row["reply_count"] >= VOICE_REPLY_DAILY_LIMIT:
+        if row and row["reply_count"] >= daily_limit:
             return False
         conn.execute(
             """INSERT INTO voice_usage(chat_id, usage_date, reply_count)
@@ -3569,10 +3655,11 @@ def _claim_voice_usage_warning() -> dict[str, int] | None:
     """Атомарно резервує єдине денне попередження після досягнення порога."""
     usage_date = datetime.now().astimezone().date().isoformat()
     warning_key = f"voice_usage_warning:{usage_date}"
+    daily_limit = get_voice_reply_daily_limit()
     warning_percent = get_voice_usage_warning_percent()
     threshold = max(
         1,
-        math.ceil(VOICE_REPLY_DAILY_LIMIT * warning_percent / 100),
+        math.ceil(daily_limit * warning_percent / 100),
     )
     with _lock, _db() as conn:
         today_count = conn.execute(
@@ -3591,7 +3678,7 @@ def _claim_voice_usage_warning() -> dict[str, int] | None:
         return None
     return {
         "today": int(today_count),
-        "limit": VOICE_REPLY_DAILY_LIMIT,
+        "limit": daily_limit,
         "percent": warning_percent,
     }
 
@@ -3682,3 +3769,20 @@ def set_voice_usage_warning_percent(percent: int) -> None:
         )
         conn.commit()
     VOICE_USAGE_WARNING_PERCENT = percent
+
+
+def set_voice_reply_daily_limit(limit: int) -> None:
+    """Зберігає денний ліміт і застосовує його до наступних голосових відповідей."""
+    global VOICE_REPLY_DAILY_LIMIT
+    if isinstance(limit, bool) or not isinstance(limit, int):
+        raise ValueError("Денний ліміт має бути цілим числом більше нуля.")
+    if limit < 1:
+        raise ValueError("Денний ліміт має бути цілим числом більше нуля.")
+    with _lock, _db() as conn:
+        conn.execute(
+            """INSERT INTO metadata(key, value) VALUES (?, ?)
+               ON CONFLICT(key) DO UPDATE SET value=excluded.value""",
+            (VOICE_REPLY_DAILY_LIMIT_METADATA_KEY, str(limit)),
+        )
+        conn.commit()
+    VOICE_REPLY_DAILY_LIMIT = limit

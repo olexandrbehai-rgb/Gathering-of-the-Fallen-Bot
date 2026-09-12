@@ -185,6 +185,79 @@ class BotCoreTests(unittest.TestCase):
         finally:
             main.VOICE_REPLY_DAILY_LIMIT = original
 
+    def test_daily_voice_limit_is_persistent_and_runtime_configurable(self) -> None:
+        original_limit = main.VOICE_REPLY_DAILY_LIMIT
+        try:
+            main.set_voice_reply_daily_limit(35)
+            self.assertEqual(main.get_voice_reply_daily_limit(), 35)
+            main.VOICE_REPLY_DAILY_LIMIT = 99
+            main.init_database()
+            self.assertEqual(main.get_voice_reply_daily_limit(), 35)
+            self.assertEqual(main.VOICE_REPLY_DAILY_LIMIT, 35)
+        finally:
+            main.VOICE_REPLY_DAILY_LIMIT = original_limit
+
+    def test_daily_voice_limit_command_requires_owner_and_rejects_invalid_values(
+        self,
+    ) -> None:
+        original_admin = main.ADMIN_CHAT_ID
+        original_limit = main.VOICE_REPLY_DAILY_LIMIT
+        main.ADMIN_CHAT_ID = 999
+        message = SimpleNamespace(reply_text=AsyncMock())
+        update = SimpleNamespace(
+            effective_user=SimpleNamespace(id=999),
+            message=message,
+        )
+        try:
+            non_owner_update = SimpleNamespace(
+                effective_user=SimpleNamespace(id=1000),
+                message=message,
+                effective_message=message,
+            )
+            asyncio.run(
+                main.cmd_voice_limit(
+                    non_owner_update, SimpleNamespace(args=["45"])
+                )
+            )
+            self.assertIn(
+                "тільки власнику",
+                message.reply_text.await_args.args[0],
+            )
+            self.assertEqual(main.get_voice_reply_daily_limit(), original_limit)
+
+            for raw_limit in ("0", "-1", "abc", "1.5"):
+                message.reply_text.reset_mock()
+                asyncio.run(
+                    main.cmd_voice_limit(
+                        update, SimpleNamespace(args=[raw_limit])
+                    )
+                )
+                self.assertIn(
+                    "Некоректний денний ліміт",
+                    message.reply_text.await_args.args[0],
+                )
+
+            message.reply_text.reset_mock()
+            asyncio.run(main.cmd_voice_limit(update, SimpleNamespace(args=[])))
+            self.assertIn("Поточний денний ліміт", message.reply_text.await_args.args[0])
+
+            message.reply_text.reset_mock()
+            asyncio.run(
+                main.cmd_voice_limit(update, SimpleNamespace(args=["45"]))
+            )
+            self.assertEqual(main.get_voice_reply_daily_limit(), 45)
+            self.assertIn(
+                "застосовується без перезапуску",
+                message.reply_text.await_args.args[0],
+            )
+            self.assertEqual(
+                main.load_admin_audit(limit=1)[0]["action"],
+                "set_voice_reply_daily_limit",
+            )
+        finally:
+            main.ADMIN_CHAT_ID = original_admin
+            main.VOICE_REPLY_DAILY_LIMIT = original_limit
+
     def test_voice_message_is_transcribed_and_gets_text_response_for_any_user(self) -> None:
         original_client = main.openai_client
         transcription = AsyncMock(
