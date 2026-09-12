@@ -38,14 +38,31 @@ function createInitData(authDate: number): string {
   return params.toString();
 }
 
+function createSessionCookie(expiresAt: number): string {
+  const payload = Buffer.from(
+    JSON.stringify({
+      id: TEST_TELEGRAM_ID,
+      displayName: "Integration Fan",
+      username: "integration_fan",
+      avatarUrl: null,
+      isAdmin: false,
+      expiresAt,
+    }),
+  ).toString("base64url");
+  const signature = createHmac("sha256", SESSION_SECRET)
+    .update(payload)
+    .digest("base64url");
+  return `fallen_session=${payload}.${signature}`;
+}
+
 async function request(
   path: string,
   init: RequestInit = {},
-  authenticated = false,
+  cookie: string | boolean = false,
 ): Promise<Response> {
   const headers = new Headers(init.headers);
   if (init.body) headers.set("content-type", "application/json");
-  if (authenticated) headers.set("cookie", sessionCookie);
+  if (cookie) headers.set("cookie", typeof cookie === "string" ? cookie : sessionCookie);
   return originalFetch(`${origin}${path}`, { ...init, headers });
 }
 
@@ -102,6 +119,34 @@ test("rejects unauthenticated and expired Telegram requests", async () => {
   });
   assert.equal(expired.status, 401);
   assert.equal(expired.headers.get("set-cookie"), null);
+});
+
+test("rejects a tampered session on every protected fan route", async () => {
+  const validCookie = createSessionCookie(Date.now() + 60_000);
+  const tamperedCookie = `${validCookie.slice(0, -1)}${validCookie.endsWith("a") ? "b" : "a"}`;
+
+  const responses = await Promise.all([
+    request("/api/me", {}, tamperedCookie),
+    request(
+      "/api/subscription",
+      { method: "POST", body: JSON.stringify({ subscribed: true }) },
+      tamperedCookie,
+    ),
+    request(
+      "/api/fan-feed",
+      { method: "POST", body: JSON.stringify({ message: "Tampered session post" }) },
+      tamperedCookie,
+    ),
+  ]);
+
+  assert.deepEqual(responses.map(({ status }) => status), [401, 401, 401]);
+});
+
+test("rejects an expired correctly signed session", async () => {
+  const expiredCookie = createSessionCookie(Date.now() - 1);
+  const profile = await request("/api/me", {}, expiredCookie);
+
+  assert.equal(profile.status, 401);
 });
 
 test("keeps profile, subscription, fan wall, and AI available through one same-origin session", async () => {
