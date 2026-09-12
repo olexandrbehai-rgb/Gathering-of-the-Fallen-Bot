@@ -5,12 +5,13 @@ import {
   useListReleases, 
   useListFanPosts, 
   useCreateFanPost, 
+  useHideFanPost,
   useAskAssistant,
   useUpdateSubscription,
   useListVideos
 } from '@workspace/api-client-react';
 import { useAuth } from '@/lib/auth';
-import { Play, MessageSquare, Users, Loader2, Send, Flame, Skull, Music2, Bell, BellOff, ArrowRight, Film, Headphones, Search, X } from 'lucide-react';
+import { Play, MessageSquare, Users, Loader2, Send, Flame, Skull, Music2, Bell, BellOff, ArrowRight, Film, Headphones, Search, X, EyeOff } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
@@ -435,17 +436,37 @@ function OracleTab() {
 }
 
 function CovenTab() {
+  const { identity } = useAuth();
   const { data: posts, isLoading, refetch } = useListFanPosts();
   const createMutation = useCreateFanPost();
+  const hideMutation = useHideFanPost();
   const [msg, setMsg] = useState('');
+  const [feedback, setFeedback] = useState('');
+
+  const errorMessage = (error: unknown) => {
+    const apiError = error as { data?: { error?: string } };
+    return apiError.data?.error ?? 'Не вдалося виконати дію. Спробуйте ще раз.';
+  };
 
   const handlePost = () => {
     if (!msg.trim() || msg.length < 2) return;
     createMutation.mutate({ data: { message: msg } }, {
       onSuccess: () => {
         setMsg('');
+        setFeedback('Твій допис з’явився на фан-стіні.');
         refetch();
-      }
+      },
+      onError: (error) => setFeedback(errorMessage(error)),
+    });
+  };
+
+  const handleHide = (id: number) => {
+    hideMutation.mutate({ id }, {
+      onSuccess: () => {
+        setFeedback('Допис приховано.');
+        refetch();
+      },
+      onError: (error) => setFeedback(errorMessage(error)),
     });
   };
 
@@ -473,6 +494,11 @@ function CovenTab() {
             {!createMutation.isPending && <ArrowRight className="w-4 h-4" />}
           </Button>
         </div>
+        {feedback && (
+          <p role="status" className="mt-3 text-xs text-muted-foreground">
+            {feedback}
+          </p>
+        )}
       </div>
 
       <div className="space-y-4">
@@ -480,9 +506,25 @@ function CovenTab() {
           <div key={post.id} className="p-4 border-b border-border/40 hover:bg-secondary/10 transition-colors">
             <div className="flex justify-between items-start mb-2">
               <span className="font-bold text-sm text-primary tracking-wide">{post.author}</span>
-              <span className="text-[10px] text-muted-foreground font-mono uppercase tracking-wider">
-                {new Date(post.createdAt).toLocaleDateString('uk-UA', { day: 'numeric', month: 'short', year: 'numeric' })}
-              </span>
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] text-muted-foreground font-mono uppercase tracking-wider">
+                  {new Date(post.createdAt).toLocaleDateString('uk-UA', { day: 'numeric', month: 'short', year: 'numeric' })}
+                </span>
+                {identity?.isAdmin && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                    aria-label="Приховати допис"
+                    title="Приховати допис"
+                    disabled={hideMutation.isPending}
+                    onClick={() => handleHide(post.id)}
+                  >
+                    <EyeOff className="h-4 w-4" />
+                  </Button>
+                )}
+              </div>
             </div>
             <p className="text-sm text-foreground/90 whitespace-pre-wrap font-serif leading-relaxed">
               {post.message}

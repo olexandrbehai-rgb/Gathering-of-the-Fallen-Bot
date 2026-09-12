@@ -150,7 +150,35 @@ test("keeps profile, subscription, fan wall, and AI available through one same-o
     true,
   );
   assert.equal(post.status, 201);
-  assert.equal((await post.json() as { message: string }).message, postMessage);
+  const createdPost = await post.json() as { id: number; message: string };
+  assert.equal(createdPost.message, postMessage);
+
+  for (let index = 2; index <= 3; index += 1) {
+    const allowedPost = await request(
+      "/api/fan-feed",
+      { method: "POST", body: JSON.stringify({ message: `${postMessage} ${index}` }) },
+      true,
+    );
+    assert.equal(allowedPost.status, 201);
+  }
+  const rateLimitedPost = await request(
+    "/api/fan-feed",
+    { method: "POST", body: JSON.stringify({ message: `${postMessage} 4` }) },
+    true,
+  );
+  assert.equal(rateLimitedPost.status, 429);
+  assert.match(
+    (await rateLimitedPost.json() as { error: string }).error,
+    /Забагато дописів/,
+  );
+  assert.ok(Number(rateLimitedPost.headers.get("retry-after")) > 0);
+
+  const forbiddenHide = await request(
+    `/api/fan-feed/${createdPost.id}/hide`,
+    { method: "POST" },
+    true,
+  );
+  assert.equal(forbiddenHide.status, 403);
 
   globalThis.fetch = async (input, init) => {
     if (String(input) === "https://api.openai.com/v1/chat/completions") {

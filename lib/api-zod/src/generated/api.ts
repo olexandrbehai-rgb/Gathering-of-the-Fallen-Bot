@@ -101,6 +101,16 @@ export const CreateFanPostBody = zod.object({
 })
 
 
+export const HideFanPostParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const HideFanPostResponse = zod.object({
+  "id": zod.number(),
+  "hidden": zod.boolean()
+})
+
+
 export const askAssistantBodyMessageMax = 1800;
 
 

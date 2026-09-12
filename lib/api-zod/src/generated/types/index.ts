@@ -12,6 +12,7 @@ export * from './experience';
 export * from './fanIdentity';
 export * from './fanPost';
 export * from './fanPostInput';
+export * from './fanPostModerationResult';
 export * from './healthStatus';
 export * from './listTracksParams';
 export * from './release';

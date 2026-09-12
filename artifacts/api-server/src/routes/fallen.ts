@@ -15,6 +15,7 @@ import {
   GetExperienceResponse,
   GetMeResponse,
   GetUsageSummaryResponse,
+  HideFanPostResponse,
   ListFanPostsResponse,
   ListReleasesResponse,
   ListTracksQueryParams,
@@ -27,6 +28,8 @@ import { getSession, setSession, verifyTelegramInitData } from "../lib/telegram-
 import { releases, tracks, videos } from "../lib/fallen-catalog";
 
 const router: IRouter = Router();
+const FAN_POST_LIMIT = 3;
+const FAN_POST_WINDOW_MS = 10 * 60 * 1000;
 
 function identityOr401(req: Request, res: Response) {
   const identity = getSession(req);
@@ -202,7 +205,28 @@ router.post("/fan-feed", async (req, res): Promise<void> => {
   }
   const message = parsed.data.message.trim();
   if (/https?:\/\/|t\.me\/|@\w{3,}/i.test(message)) {
-    res.status(400).json({ error: "Links and unsolicited mentions are not allowed." });
+    res.status(400).json({ error: "Посилання та небажані згадки у фан-стіні заборонені." });
+    return;
+  }
+  const windowStart = new Date(Date.now() - FAN_POST_WINDOW_MS);
+  const recentPosts = await db
+    .select({ createdAt: fallenFanPostsTable.createdAt })
+    .from(fallenFanPostsTable)
+    .where(
+      and(
+        eq(fallenFanPostsTable.telegramId, identity.id),
+        gte(fallenFanPostsTable.createdAt, windowStart),
+      ),
+    )
+    .orderBy(desc(fallenFanPostsTable.createdAt))
+    .limit(FAN_POST_LIMIT);
+  if (recentPosts.length >= FAN_POST_LIMIT) {
+    const retryAt = recentPosts[recentPosts.length - 1]!.createdAt.getTime() + FAN_POST_WINDOW_MS;
+    const retryAfterSeconds = Math.max(1, Math.ceil((retryAt - Date.now()) / 1000));
+    res.setHeader("Retry-After", String(retryAfterSeconds));
+    res.status(429).json({
+      error: `Забагато дописів. Спробуйте знову приблизно через ${Math.ceil(retryAfterSeconds / 60)} хв.`,
+    });
     return;
   }
   const [post] = await db
@@ -221,6 +245,30 @@ router.post("/fan-feed", async (req, res): Promise<void> => {
       createdAt: post.createdAt.toISOString(),
     }),
   );
+});
+
+router.post("/fan-feed/:id/hide", async (req, res): Promise<void> => {
+  const identity = identityOr401(req, res);
+  if (!identity) return;
+  if (!identity.isAdmin) {
+    res.status(403).json({ error: "Лише адміністратор може приховувати дописи." });
+    return;
+  }
+  const id = Number(req.params.id);
+  if (!Number.isSafeInteger(id) || id <= 0) {
+    res.status(404).json({ error: "Допис не знайдено." });
+    return;
+  }
+  const [post] = await db
+    .update(fallenFanPostsTable)
+    .set({ hidden: true })
+    .where(eq(fallenFanPostsTable.id, id))
+    .returning({ id: fallenFanPostsTable.id });
+  if (!post) {
+    res.status(404).json({ error: "Допис не знайдено." });
+    return;
+  }
+  res.json(HideFanPostResponse.parse({ id: post.id, hidden: true }));
 });
 
 router.post("/assistant", async (req, res): Promise<void> => {

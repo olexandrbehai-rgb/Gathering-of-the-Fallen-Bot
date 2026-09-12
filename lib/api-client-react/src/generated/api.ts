@@ -26,6 +26,7 @@ import type {
   FanIdentity,
   FanPost,
   FanPostInput,
+  FanPostModerationResult,
   HealthStatus,
   ListTracksParams,
   Release,
@@ -113,13 +114,6 @@ export function useHealthCheck<TData = Awaited<ReturnType<typeof healthCheck>>, 
 
   return { ...query, queryKey: queryOptions.queryKey };
 }
-
-
-
-
-
-
-
 export const getGetExperienceUrl = () => {
 
 
@@ -517,7 +511,7 @@ export const createFanPost = async (fanPostInput: FanPostInput, options?: Reques
 
 
 
-export const getCreateFanPostMutationOptions = <TError = ErrorType<unknown>,
+export const getCreateFanPostMutationOptions = <TError = ErrorType<void>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createFanPost>>, TError,{data: BodyType<FanPostInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
 ): UseMutationOptions<Awaited<ReturnType<typeof createFanPost>>, TError,{data: BodyType<FanPostInput>}, TContext> => {
 
@@ -546,9 +540,9 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
 
     export type CreateFanPostMutationResult = NonNullable<Awaited<ReturnType<typeof createFanPost>>>
     export type CreateFanPostMutationBody = BodyType<FanPostInput>
-    export type CreateFanPostMutationError = ErrorType<unknown>
+    export type CreateFanPostMutationError = ErrorType<void>
 
-    export const useCreateFanPost = <TError = ErrorType<unknown>,
+    export const useCreateFanPost = <TError = ErrorType<void>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createFanPost>>, TError,{data: BodyType<FanPostInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
  ): UseMutationResult<
         Awaited<ReturnType<typeof createFanPost>>,
@@ -557,6 +551,70 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
         TContext
       > => {
       return useMutation(getCreateFanPostMutationOptions(options));
+    }
+
+export const getHideFanPostUrl = (id: number,) => {
+
+
+
+
+  return `/api/fan-feed/${id}/hide`
+}
+
+export const hideFanPost = async (id: number, options?: RequestInit): Promise<FanPostModerationResult> => {
+
+  return customFetch<FanPostModerationResult>(getHideFanPostUrl(id),
+  {
+    ...options,
+    method: 'POST'
+
+
+  }
+);}
+
+
+
+
+export const getHideFanPostMutationOptions = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof hideFanPost>>, TError,{id: number}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof hideFanPost>>, TError,{id: number}, TContext> => {
+
+const mutationKey = ['hideFanPost'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof hideFanPost>>, {id: number}> = (props) => {
+          const {id} = props ?? {};
+
+          return  hideFanPost(id,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type HideFanPostMutationResult = NonNullable<Awaited<ReturnType<typeof hideFanPost>>>
+
+    export type HideFanPostMutationError = ErrorType<void>
+
+    export const useHideFanPost = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof hideFanPost>>, TError,{id: number}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof hideFanPost>>,
+        TError,
+        {id: number},
+        TContext
+      > => {
+      return useMutation(getHideFanPostMutationOptions(options));
     }
 
 export const getAskAssistantUrl = () => {

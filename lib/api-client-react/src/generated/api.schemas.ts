@@ -60,6 +60,11 @@ export interface FanPostInput {
   message: string;
 }
 
+export interface FanPostModerationResult {
+  id: number;
+  hidden: boolean;
+}
+
 export interface AssistantInput {
   /**
      * @minLength 1
